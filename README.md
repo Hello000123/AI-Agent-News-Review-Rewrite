@@ -1,10 +1,10 @@
-# PressReady — Simplified AI Press Release Reviewer
+# PressReady — AI News Draft Review and Rewrite
 
 PressReady is a focused local website for one workflow:
 
-    Draft input → Review Agent → Optional or automatic Rewrite Agent → Final output
+    Draft input → Review Agent → Score and feedback → Edit yourself or request Rewrite Agent → Final news report
 
-The Review Agent scores a draft and returns structured feedback. A score below the configured threshold triggers an automatic rewrite. A passing draft remains unchanged and can still be rewritten on request.
+The Review Agent scores a draft once and returns the complete structured review immediately. Rewriting never starts automatically. After every review, the user can edit the populated draft or explicitly ask the Rewrite Agent to turn the immutable reviewed version into a publication-quality news report.
 
 The project is intentionally limited to this workflow. It has no login, database, user history, news search, language switcher, dark theme, publishing, distribution, or scheduled work.
 
@@ -23,8 +23,8 @@ No DeepSeek SDK, UI framework, database, or separate Express server is required.
 ## Folder structure
 
     app/
-      api/review/route.ts       Review and automatic-rewrite endpoint
-      api/rewrite/route.ts      Manual/repeated rewrite endpoint
+      api/review/route.ts       Review-only endpoint
+      api/rewrite/route.ts      Explicit/repeated rewrite endpoint
       globals.css               Responsive white-theme interface
       layout.tsx                Metadata and document layout
       page.tsx                  Server-rendered page shell
@@ -56,7 +56,7 @@ Requirements:
 
 From PowerShell:
 
-    cd "C:\AI\SimpleWebsite"
+    cd "C:\AI\AI-Agent-News-Review-Rewrite"
     npm install
     Copy-Item .env.example .env.local
 
@@ -70,7 +70,7 @@ Required:
 | --- | --- | --- |
 | DEEPSEEK_API_KEY | your-key | Server-only DeepSeek credential |
 | DEEPSEEK_MODEL | deepseek-v4-flash | Model used by both agents |
-| REVIEW_PASS_SCORE | 80 | Overall score that passes without an automatic rewrite |
+| REVIEW_PASS_SCORE | 80 | Overall score used to label a review as passing |
 
 Optional server settings:
 
@@ -118,14 +118,16 @@ The browser sends drafts only to the local Next.js backend. The backend calls De
 
 The production server also starts at [http://localhost:3000](http://localhost:3000) unless PORT is set.
 
-## Review threshold and decision logic
+## Score-first review and decision logic
 
 REVIEW_PASS_SCORE defaults to 80.
 
-- overallScore below the threshold: the backend automatically calls the Rewrite Agent.
-- overallScore at or above the threshold: the original draft is the recommended output and no rewrite is made.
-- A passing draft exposes Rewrite Anyway.
-- Every result exposes Rewrite Again.
+- `/api/review` invokes only the Review Agent, exactly once, for both passing and failing drafts.
+- Every valid result immediately shows the score, category rationale, strengths, problems, missing information, recommendations, and the actions `Rewrite with AI` and `Edit draft myself`.
+- `Rewrite with AI` separately calls `/api/rewrite` with the immutable reviewed draft and its matching validated review.
+- `Edit draft myself` only focuses the populated editor. It makes no AI request and keeps the latest review visible.
+- Once the draft changes, the review is marked as applying to an earlier version. AI rewriting stays disabled until the edited draft is reviewed again.
+- The final-output panel appears only after a successful, explicit AI rewrite request. A rewrite error preserves the draft, review, feedback, and both actions.
 
 The Review Agent returns PASS or REWRITE_REQUIRED, but the backend recalculates both the authoritative weighted overall score and the decision. The weighting is:
 
@@ -143,7 +145,7 @@ The Review Agent:
 
 - evaluates without rewriting;
 - scores content, clarity, structure, tone, and writing mechanics using fixed weights and published score bands;
-- distinguishes intrinsic writing quality from the work needed to convert news or analysis into a press release;
+- distinguishes intrinsic writing quality from the work needed to convert source material into a news report;
 - applies equivalent standards across languages and ignores publisher reputation;
 - treats media contacts, boilerplates, executive quotations, formal datelines, and calls to action as optional unless essential to the specific announcement;
 - returns a required rationale for every category score, plus strengths, problems, missing information, and recommendations;
@@ -153,10 +155,12 @@ The Review Agent:
 The Rewrite Agent:
 
 - receives the original draft plus validated review feedback;
-- corrects language, structure, tone, readability, and repetition;
-- preserves supported facts;
-- uses bracketed placeholders for missing facts;
-- returns only a complete press release.
+- treats the original draft as the factual source of truth and feedback only as editing guidance;
+- creates a concise factual headline, strong lead, inverted-pyramid structure, short paragraphs, and neutral newsroom language;
+- preserves material supported facts, exact direct quotations, names, dates, numbers, attribution, uncertainty, language, and script;
+- never invents facts, translations, context, causal links, quotations, or placeholders;
+- removes promotional repetition and press-release artifacts without dropping material facts;
+- returns only a headline, one blank line, and the news-report body.
 
 User drafts and feedback are wrapped as JSON data in the prompts and explicitly treated as untrusted content. Generated output is rendered as plain textarea text; HTML is never injected.
 
@@ -173,31 +177,35 @@ Or run checks separately:
     npm run test:unit
     npm run build
 
-The unit suite covers:
+The unit and component suites cover:
 
 - empty, whitespace-only, very short, at-limit, and over-limit drafts;
 - score bounds and strict review JSON;
-- low-score automatic rewriting;
-- high-score pass without rewriting;
-- manual and repeated rewrites;
+- passing and failing reviews making one Review Agent call each with no rewrite;
+- review score and feedback rendering without final output;
+- both post-review actions for every result;
+- separate, explicit, and repeated Rewrite Agent calls;
+- edit-without-AI behavior and sticky stale-review invalidation;
+- rewrite-error state preservation and duplicate-submit prevention;
 - threshold/decision normalization;
 - missing API configuration;
 - API authentication and rate-limit failures;
 - request timeout and network-safe errors;
 - malformed, empty, and truncated AI responses;
 - request content type, request JSON, and request-size limits;
-- agent prompt requirements and untrusted-data boundaries.
+- news-editor prompt structure, factual fidelity, language/script preservation, press-release-artifact removal, and untrusted-data boundaries;
+- a 12-case bilingual evaluation set spanning English, Traditional Chinese, Simplified Chinese script preservation, mixed-language names, rough notes, promotional releases, quotations, dates, statistics, allegations, uncertainty, missing information, placeholders, contradictions, and prompt injection.
 
 ### Browser testing without a real API key
 
 The bundled mock provider is for local QA only. Run it in one PowerShell window:
 
-    cd "C:\AI\SimpleWebsite"
+    cd "C:\AI\AI-Agent-News-Review-Rewrite"
     npm run mock:deepseek
 
 Run the site in another window:
 
-    cd "C:\AI\SimpleWebsite"
+    cd "C:\AI\AI-Agent-News-Review-Rewrite"
     $env:DEEPSEEK_API_KEY="local-test-key"
     $env:DEEPSEEK_API_BASE_URL="http://127.0.0.1:4010"
     $env:DEEPSEEK_TIMEOUT_MS="1000"
@@ -205,13 +213,32 @@ Run the site in another window:
 
 Useful mock inputs:
 
-- A normal rough draft returns a low score and automatic rewrite.
-- A draft containing FOR IMMEDIATE RELEASE returns a passing review.
+- A normal rough draft returns a low score and no rewrite.
+- A draft containing `SIMULATE_PASS_REVIEW` returns a passing review and no rewrite.
+- Clicking `Rewrite with AI` makes the only rewrite call and reveals the final-output panel.
+- A draft containing `SIMULATE_REWRITE_FAILURE` returns a safe rewrite error while preserving review state.
 - SIMULATE_AUTH_FAILURE returns an authentication error.
 - SIMULATE_MALFORMED_REVIEW returns invalid Review Agent JSON.
 - SIMULATE_TIMEOUT waits long enough to trigger the configured timeout.
 
-Use browser responsive tools to check a desktop width around 1440 pixels and a mobile width around 390 pixels. Verify Copy to Clipboard, Rewrite Anyway, Rewrite Again, Edit Input, and Start New Draft.
+The mock provider logs only the Review/Rewrite Agent call count, never draft content. Use browser responsive tools to check a desktop width around 1440 pixels and a mobile width around 390 pixels. Verify review-only rendering, both post-review actions, stale-review behavior, error retry, final-output gating, copy, repeated rewrite, and Start New Draft.
+
+### Optional live rewrite evaluation
+
+The deterministic test suite is the default quality gate. To evaluate the same made-up bilingual fixtures against the configured live model, start the application and run:
+
+    npm run eval:live
+
+Set `LIVE_EVAL_IDS` to a comma-separated subset for staged batches and `LIVE_EVAL_BASE_URL` when the site is not on `http://127.0.0.1:3000`. The harness counts every request and checks traceability, exact quotations, required terms, new numbers/placeholders, prohibited boilerplate, outlet attribution, markdown, and the headline/body format. It never prints credentials.
+
+## Editorial research basis
+
+The news-editor prompt uses only shared, high-level principles—accuracy, concise structure, close attribution, explicit uncertainty, and separation of reporting from promotion. It does not copy article wording or imitate an outlet's voice. Research reviewed:
+
+- BBC [Accuracy editorial guidelines](https://downloads.bbc.co.uk/guidelines/editorialguidelines/pdfs/bbc-editorial-guidelines-section-3-accuracy.pdf), [Writing Concisely exercise](https://downloads.bbc.co.uk/academy/academyfiles/Writing_Concisely.pdf), and a [representative report](https://feeds.bbci.co.uk/news/articles/c7vlngvm6d7o)
+- CNN Academy [Ethics in Journalism](https://academy.cnn.com/hub-course/ethics-in-journalism/) and [representative CNN Newsource reporting](https://kesq.com/news/national-politics/cnn-us-politics/2026/05/12/exclusive-cia-escalates-secret-war-on-cartels-with-deadly-operations-inside-mexico/)
+- TVB News [representative Traditional Chinese report](https://news.tvb.com/tc/1177168-%E8%AD%A6%E6%96%B9%E6%89%93%E6%93%8A%E5%A4%96%E5%9C%8D%E8%B3%AD%E5%8D%9A%E7%93%A6%E8%A7%A3%E4%B8%80%E9%BB%91%E7%A4%BE%E6%9C%83%E6%93%8D%E6%8E%A7%E5%9C%98%E5%A4%A5%E7%B1%B2%E5%B8%82%E6%B0%91%E5%8B%BF%E5%8F%83%E8%88%87%E9%9D%9E%E6%B3%95%E8%B3%AD%E5%8D%9A)
+- 東方日報 [representative Traditional Chinese report](https://orientaldaily.on.cc/content/%E8%A6%81%E8%81%9E%E6%B8%AF%E8%81%9E/odn-20260609-0609_00176_042/%E5%81%B7%E9%8C%A2%E5%85%BC%E6%B8%B8%E8%AA%AA%E9%8A%B7%E6%A1%88--%E9%AB%98%E7%B4%9A%E9%97%9C%E5%93%A1%E8%AA%8D3%E7%BD%AA)
 
 ## Input and data limits
 

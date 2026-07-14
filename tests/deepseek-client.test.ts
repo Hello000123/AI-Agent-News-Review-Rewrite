@@ -60,7 +60,7 @@ describe("DeepSeek client", () => {
   });
 
   it("omits JSON mode for Rewrite Agent text output", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(completionResponse("Rewritten release."));
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse("Rewritten news report."));
     await requestDeepSeekCompletion(
       { ...reviewRequest, responseFormat: "text" },
       { config, fetchImpl: fetchMock as unknown as typeof fetch },

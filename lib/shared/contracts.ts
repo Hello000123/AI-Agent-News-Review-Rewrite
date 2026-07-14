@@ -70,8 +70,6 @@ export const rewriteRequestSchema = z
 export const reviewApiResponseSchema = z
   .object({
     review: reviewResultSchema,
-    finalText: z.string(),
-    wasRewritten: z.boolean(),
     passScore: z.number().min(0).max(100),
     message: z.string(),
   })

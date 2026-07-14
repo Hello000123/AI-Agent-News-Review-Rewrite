@@ -544,12 +544,53 @@ textarea:disabled {
   outline-offset: 6px;
 }
 
+.stale-review-note {
+  display: flex;
+  margin-top: 20px;
+  padding: 14px 16px;
+  align-items: flex-start;
+  gap: 11px;
+  border: 1px solid #efd7ae;
+  border-radius: 12px;
+  background: var(--amber-soft);
+  color: #704407;
+}
+
+.stale-review-note > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--amber);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.stale-review-note strong {
+  display: block;
+  color: #5f3904;
+  font-size: 13px;
+}
+
+.stale-review-note p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.stale-review-note + .decision-banner {
+  margin-top: 12px;
+}
+
 .decision-banner {
   --decision-color: var(--amber);
   display: grid;
   margin-top: 20px;
   padding: 24px;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 22px;
   border: 1px solid #efd7ae;
@@ -638,7 +679,14 @@ textarea:disabled {
   font-size: 11px;
 }
 
-.decision-action {
+.decision-actions {
+  display: grid;
+  min-width: 166px;
+  gap: 10px;
+}
+
+.decision-actions .button {
+  width: 100%;
   white-space: nowrap;
 }
 
@@ -781,11 +829,6 @@ textarea:disabled {
   color: var(--blue-dark);
 }
 
-.badge-original {
-  background: var(--green-soft);
-  color: var(--green);
-}
-
 .output-textarea {
   min-height: 420px;
   padding: 22px;
@@ -846,8 +889,11 @@ footer p {
     grid-template-columns: auto 1fr;
   }
 
-  .decision-action {
+  .decision-actions {
+    display: flex;
     grid-column: 1 / -1;
+    min-width: 0;
+    flex-wrap: wrap;
     justify-self: start;
   }
 
@@ -980,8 +1026,10 @@ footer p {
     font-size: 21px;
   }
 
-  .decision-action {
+  .decision-actions {
+    display: grid;
     width: 100%;
+    grid-template-columns: 1fr;
     justify-self: stretch;
   }
 

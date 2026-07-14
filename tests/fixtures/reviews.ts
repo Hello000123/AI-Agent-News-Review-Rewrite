@@ -11,13 +11,13 @@ export const lowReview: ReviewResult = {
     content: "The announcement is identifiable but lacks essential supporting detail.",
     clarity: "Fragments and repetition make the meaning difficult to follow.",
     structure: "The draft has no effective lead or logical paragraph order.",
-    tone: "Informal wording is not suitable for a professional release.",
+    tone: "Informal wording is not suitable for a professional news report.",
     writing: "Frequent sentence and punctuation errors require correction.",
   },
   decision: "PASS",
   strengths: ["The main announcement can be identified."],
   problems: ["The opening is fragmented and repetitive."],
-  missingInformation: ["Publication date", "Company contact details"],
+  missingInformation: ["[Content - moderate] The responsible organisation is not identified."],
   recommendations: ["Lead with the announcement and add the missing details."],
 };
 

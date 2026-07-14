@@ -7,8 +7,9 @@ interface ReviewSummaryProps {
   passScore: number;
   message: string;
   busy: boolean;
-  wasRewritten: boolean;
-  onRewriteAnyway: () => void;
+  reviewIsStale: boolean;
+  onRewrite: () => void;
+  onEditDraft: () => void;
 }
 
 interface ScoreItem {
@@ -53,19 +54,20 @@ export function ReviewSummary({
   passScore,
   message,
   busy,
-  wasRewritten,
-  onRewriteAnyway,
+  reviewIsStale,
+  onRewrite,
+  onEditDraft,
 }: ReviewSummaryProps) {
   const passed = review.overallScore >= passScore;
   const scores: ScoreItem[] = [
-    { label: "Content & announcement (40%)", score: review.contentScore },
+    { label: "Content & facts (40%)", score: review.contentScore },
     { label: "Clarity & readability (20%)", score: review.clarityScore },
     { label: "Structure & organisation (20%)", score: review.structureScore },
     { label: "Professional tone (15%)", score: review.toneScore },
     { label: "Grammar & mechanics (5%)", score: review.writingScore },
   ];
   const scoreReasons = [
-    "Content & announcement: " + review.scoreReasons.content,
+    "Content & facts: " + review.scoreReasons.content,
     "Clarity & readability: " + review.scoreReasons.clarity,
     "Structure & organisation: " + review.scoreReasons.structure,
     "Professional tone: " + review.scoreReasons.tone,
@@ -80,8 +82,25 @@ export function ReviewSummary({
         Review result
       </div>
 
+      {reviewIsStale ? (
+        <div className="stale-review-note" id="stale-review-note" role="status">
+          <span aria-hidden="true">!</span>
+          <div>
+            <strong>Review applies to an earlier version</strong>
+            <p>
+              You changed the draft after this review. Review the edited draft again before
+              requesting an AI rewrite.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <div className={"decision-banner " + (passed ? "decision-pass" : "decision-rewrite")}>
-        <div className="score-ring" style={scoreStyle} aria-label={rounded(review.overallScore) + " out of 100"}>
+        <div
+          className="score-ring"
+          style={scoreStyle}
+          aria-label={rounded(review.overallScore) + " out of 100"}
+        >
           <div className="score-ring-inner">
             <strong>{rounded(review.overallScore)}</strong>
             <span>/ 100</span>
@@ -90,22 +109,33 @@ export function ReviewSummary({
         <div className="decision-copy">
           <div className="decision-label">
             <span className="status-dot" aria-hidden="true" />
-            {passed ? "Passed review" : "Rewrite required"}
+            {passed ? "Passed review" : "Below pass threshold"}
           </div>
-          <h2 id="review-title">{passed ? "Your draft is ready to use" : "Your draft has been improved"}</h2>
+          <h2 id="review-title">
+            {passed ? "Review complete" : "Review complete — changes recommended"}
+          </h2>
           <p>{message}</p>
           <p className="threshold-note">Pass threshold: {passScore}/100</p>
         </div>
-        {passed && !wasRewritten ? (
+        <div className="decision-actions">
           <button
-            className="button button-secondary decision-action"
+            className="button button-primary"
             type="button"
-            onClick={onRewriteAnyway}
+            onClick={onRewrite}
+            disabled={busy || reviewIsStale}
+            aria-describedby={reviewIsStale ? "stale-review-note" : undefined}
+          >
+            Rewrite with AI
+          </button>
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={onEditDraft}
             disabled={busy}
           >
-            Rewrite Anyway
+            Edit draft myself
           </button>
-        ) : null}
+        </div>
       </div>
 
       <div className="score-grid" aria-label="Category scores">

@@ -13,7 +13,7 @@ const lowReview = {
     content: "The central announcement lacks essential supporting facts.",
     clarity: "Fragments and repetition obscure the intended meaning.",
     structure: "The draft lacks a clear lead and logical order.",
-    tone: "The wording is too informal for a professional release.",
+    tone: "The wording is too informal for a professional news report.",
     writing: "Grammar and punctuation errors require correction.",
   },
   decision: "REWRITE_REQUIRED",
@@ -22,10 +22,12 @@ const lowReview = {
     "The opening does not clearly state the news.",
     "Sentence fragments and repetition reduce readability.",
   ],
-  missingInformation: ["Publication date", "Location", "Company contact information"],
+  missingInformation: [
+    "[Content - moderate] The responsible organisation and timing are not identified.",
+  ],
   recommendations: [
     "Lead with the announcement.",
-    "Use complete sentences and a professional press release structure.",
+    "Use complete sentences and a professional news-report structure.",
   ],
 };
 
@@ -52,6 +54,9 @@ const highReview = {
   missingInformation: [],
   recommendations: ["Perform a final fact check before distribution."],
 };
+
+let reviewCalls = 0;
+let rewriteCalls = 0;
 
 function sendJson(response, status, body) {
   response.writeHead(status, {
@@ -112,31 +117,39 @@ const server = createServer((request, response) => {
     }
 
     if (body.response_format?.type === "json_object") {
+      reviewCalls += 1;
+      process.stdout.write(`Mock Review Agent call ${reviewCalls}\n`);
       const content = userContent.includes("SIMULATE_MALFORMED_REVIEW")
         ? "{invalid json"
-        : JSON.stringify(userContent.includes("FOR IMMEDIATE RELEASE") ? highReview : lowReview);
+        : JSON.stringify(userContent.includes("SIMULATE_PASS_REVIEW") ? highReview : lowReview);
       sendJson(response, 200, completion(content));
       return;
     }
 
-    const rewrittenRelease = [
-      "FOR IMMEDIATE RELEASE",
-      "",
-      "[Company Name] Announces New Community Initiative",
-      "",
-      "[Location] — [Date] — [Company Name] today announced a new community initiative designed to expand access to local services.",
-      "",
-      "The initiative will begin next month, according to the original announcement. Additional programme details will be shared as they are confirmed.",
-      "",
-      "“[Insert an approved quotation from a named spokesperson],” said [Spokesperson Name], [Title].",
-      "",
-      "About [Company Name]",
-      "[Insert a factual company boilerplate.]",
-      "",
-      "Media Contact",
-      "[Contact Information]",
-    ].join("\n");
-    sendJson(response, 200, completion(rewrittenRelease));
+    rewriteCalls += 1;
+    process.stdout.write(`Mock Rewrite Agent call ${rewriteCalls}\n`);
+    if (userContent.includes("SIMULATE_REWRITE_FAILURE")) {
+      sendJson(response, 500, { error: { message: "Mock rewrite failure" } });
+      return;
+    }
+
+    const payloadStart = userContent.lastIndexOf("\n\n{");
+    let payload;
+    try {
+      payload = JSON.parse(userContent.slice(payloadStart + 2));
+    } catch {
+      sendJson(response, 400, { error: { message: "Mock rewrite payload was invalid" } });
+      return;
+    }
+    const originalDraft = String(payload.originalDraft ?? "").trim();
+    const requiredLanguage = String(payload.requiredOutputLanguage ?? "");
+    const headline = requiredLanguage.startsWith("Traditional Chinese")
+      ? "經審閱草稿的新聞報道"
+      : requiredLanguage.startsWith("Simplified Chinese")
+        ? "经审阅草稿改写的新闻报道"
+        : "News report based on the reviewed draft";
+    const rewrittenReport = [headline, "", originalDraft].join("\n");
+    sendJson(response, 200, completion(rewrittenReport));
   });
 });
 

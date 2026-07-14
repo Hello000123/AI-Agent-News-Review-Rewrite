@@ -25,12 +25,12 @@ function errorMessage(error: unknown) {
 
 export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspaceProps) {
   const [draft, setDraft] = useState("");
-  const [submittedDraft, setSubmittedDraft] = useState("");
+  const [reviewedDraft, setReviewedDraft] = useState("");
   const [review, setReview] = useState<ReviewResult | null>(null);
+  const [reviewIsStale, setReviewIsStale] = useState(false);
   const [finalText, setFinalText] = useState("");
   const [message, setMessage] = useState("");
   const [passScore, setPassScore] = useState(initialPassScore);
-  const [wasRewritten, setWasRewritten] = useState(false);
   const [processing, setProcessing] = useState<ProcessingState>("idle");
   const [inputError, setInputError] = useState("");
   const [requestError, setRequestError] = useState("");
@@ -40,14 +40,17 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   const outputRef = useRef<HTMLTextAreaElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  const inFlightRef = useRef(false);
   const busy = processing !== "idle";
   const words = countWords(draft);
 
   function clearResults() {
+    setReviewedDraft("");
     setReview(null);
+    setReviewIsStale(false);
     setFinalText("");
     setMessage("");
-    setWasRewritten(false);
+    setPassScore(initialPassScore);
     setCopied(false);
     setRequestError("");
   }
@@ -65,15 +68,20 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   }
 
   function handleDraftChange(value: string) {
-    if (review) clearResults();
-    else setRequestError("");
+    if (inFlightRef.current) return;
+    if (review && value !== draft) {
+      setReviewIsStale(true);
+      setFinalText("");
+      setCopied(false);
+    }
+    setRequestError("");
     setDraft(value);
     setInputError("");
   }
 
   async function handleReview(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (inFlightRef.current) return;
 
     if (!draft.trim()) {
       setInputError("Enter a draft before requesting a review.");
@@ -86,41 +94,47 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
       return;
     }
 
+    const draftToReview = draft;
+    inFlightRef.current = true;
     setInputError("");
-    clearResults();
+    setRequestError("");
+    setCopied(false);
     setProcessing("reviewing");
 
     try {
-      const result = await requestReview(draft);
-      setSubmittedDraft(draft);
+      const result = await requestReview(draftToReview);
+      setReviewedDraft(draftToReview);
       setReview(result.review);
-      setFinalText(result.finalText);
+      setReviewIsStale(false);
+      setFinalText("");
       setMessage(result.message);
       setPassScore(result.passScore);
-      setWasRewritten(result.wasRewritten);
       requestAnimationFrame(() => resultRef.current?.focus());
     } catch (error) {
       showRequestError(errorMessage(error));
     } finally {
+      inFlightRef.current = false;
       setProcessing("idle");
     }
   }
 
   async function handleRewrite() {
-    if (busy || !review || !submittedDraft) return;
+    if (inFlightRef.current || !review || !reviewedDraft || reviewIsStale) return;
 
+    const draftForRewrite = reviewedDraft;
+    const reviewForRewrite = review;
+    inFlightRef.current = true;
     setRequestError("");
     setCopied(false);
     setProcessing("rewriting");
     try {
-      const result = await requestRewrite(submittedDraft, review);
+      const result = await requestRewrite(draftForRewrite, reviewForRewrite);
       setFinalText(result.finalText);
-      setWasRewritten(true);
-      setMessage("A new version was created from the original draft and review feedback.");
       requestAnimationFrame(() => outputRef.current?.focus());
     } catch (error) {
       showRequestError(errorMessage(error));
     } finally {
+      inFlightRef.current = false;
       setProcessing("idle");
     }
   }
@@ -152,13 +166,11 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   }
 
   function handleEditInput() {
-    clearResults();
     focusInput();
   }
 
   function handleStartNew() {
     setDraft("");
-    setSubmittedDraft("");
     setInputError("");
     clearResults();
     focusInput();
@@ -166,9 +178,9 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
 
   const loadingMessage =
     processing === "reviewing"
-      ? "Reviewing your draft and rewriting it automatically if needed…"
+      ? "Scoring the draft and preparing complete review feedback…"
       : processing === "rewriting"
-        ? "Creating a new professional rewrite…"
+        ? "Creating a publication-quality news report from the reviewed draft…"
         : "";
 
   return (
@@ -182,15 +194,15 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
           <div>
             <h2>Paste your draft</h2>
             <p>
-              Add the full announcement, including any quotes, dates, locations, and contact
-              details you already have.
+              Add the complete source text, including every supported quotation, date, location,
+              number, and attribution.
             </p>
           </div>
           <span className="privacy-note">Sent to DeepSeek only when submitted</span>
         </div>
 
         <label className="input-label" htmlFor="draft-input">
-          Press release draft <span aria-hidden="true">*</span>
+          News draft <span aria-hidden="true">*</span>
         </label>
         <textarea
           id="draft-input"
@@ -198,7 +210,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
           className={"draft-textarea " + (inputError ? "field-error" : "")}
           value={draft}
           onChange={(event) => handleDraftChange(event.target.value)}
-          placeholder="Example: [Company Name] today announced a new initiative that…"
+          placeholder="Paste a report, announcement, or set of news notes to review…"
           aria-describedby="draft-help draft-count draft-error"
           aria-invalid={Boolean(inputError)}
           aria-required="true"
@@ -208,7 +220,10 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
         />
 
         <div className="input-meta">
-          <p id="draft-help">Include only supported facts. Missing details can be added as placeholders.</p>
+          <p id="draft-help">
+            Include only supported facts. Keep existing placeholders when needed; never guess
+            missing information.
+          </p>
           <p id="draft-count" className="count">
             {words.toLocaleString("en-US")} {words === 1 ? "word" : "words"} ·{" "}
             {draft.length.toLocaleString("en-US")} /{" "}
@@ -256,33 +271,35 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
         </div>
       ) : null}
 
-      {review && finalText ? (
+      {review ? (
         <div
           className="results-stack"
           ref={resultRef}
           tabIndex={-1}
           role="region"
-          aria-label="Review result and final output"
+          aria-label="Review result"
         >
           <ReviewSummary
             review={review}
             passScore={passScore}
             message={message}
             busy={busy}
-            wasRewritten={wasRewritten}
-            onRewriteAnyway={handleRewrite}
+            reviewIsStale={reviewIsStale}
+            onRewrite={handleRewrite}
+            onEditDraft={handleEditInput}
           />
-          <OutputPanel
-            output={finalText}
-            wasRewritten={wasRewritten}
-            busy={busy}
-            copied={copied}
-            outputRef={outputRef}
-            onCopy={handleCopy}
-            onRewriteAgain={handleRewrite}
-            onEditInput={handleEditInput}
-            onStartNew={handleStartNew}
-          />
+          {finalText ? (
+            <OutputPanel
+              output={finalText}
+              busy={busy}
+              copied={copied}
+              outputRef={outputRef}
+              onCopy={handleCopy}
+              onRewriteAgain={handleRewrite}
+              onEditInput={handleEditInput}
+              onStartNew={handleStartNew}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>

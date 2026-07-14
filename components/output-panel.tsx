@@ -2,7 +2,6 @@ import type { RefObject } from "react";
 
 interface OutputPanelProps {
   output: string;
-  wasRewritten: boolean;
   busy: boolean;
   copied: boolean;
   outputRef: RefObject<HTMLTextAreaElement | null>;
@@ -14,7 +13,6 @@ interface OutputPanelProps {
 
 export function OutputPanel({
   output,
-  wasRewritten,
   busy,
   copied,
   outputRef,
@@ -31,20 +29,17 @@ export function OutputPanel({
             <span>03</span>
             Final output
           </div>
-          <h2 id="output-title">Recommended press release</h2>
+          <h2 id="output-title">AI-rewritten news report</h2>
           <p>
-            {wasRewritten
-              ? "AI-rewritten using the review feedback. Check every placeholder before use."
-              : "The original draft is recommended because it passed the quality threshold."}
+            Created from the reviewed draft and its feedback. Verify every name, date, number,
+            quotation, attribution, and retained placeholder before publication.
           </p>
         </div>
-        <span className={"output-badge " + (wasRewritten ? "badge-ai" : "badge-original")}>
-          {wasRewritten ? "AI rewritten" : "Original draft"}
-        </span>
+        <span className="output-badge badge-ai">AI rewritten</span>
       </div>
 
       <label className="sr-only" htmlFor="final-output">
-        Final press release text
+        Final news report text
       </label>
       <textarea
         id="final-output"
@@ -65,17 +60,17 @@ export function OutputPanel({
           onClick={onRewriteAgain}
           disabled={busy}
         >
-          Rewrite Again
+          Rewrite with AI again
         </button>
         <button className="button button-quiet" type="button" onClick={onEditInput} disabled={busy}>
-          Edit Input
+          Edit draft myself
         </button>
         <button className="button button-quiet" type="button" onClick={onStartNew} disabled={busy}>
           Start New Draft
         </button>
       </div>
       <p className="copy-status" role="status" aria-live="polite">
-        {copied ? "The final press release was copied to your clipboard." : ""}
+        {copied ? "The final news report was copied to your clipboard." : ""}
       </p>
     </section>
   );

@@ -10,7 +10,9 @@ import {
   MAX_DRAFT_CHARS,
   calculateOverallScore,
   draftSchema,
+  reviewApiResponseSchema,
   reviewResultSchema,
+  rewriteRequestSchema,
 } from "@/lib/shared/contracts";
 import { highReview } from "@/tests/fixtures/reviews";
 
@@ -48,6 +50,36 @@ describe("input and review contracts", () => {
         writingScore: 60,
       }),
     ).toBe(82);
+  });
+
+  it("accepts a review-only API response and rejects legacy automatic-output fields", () => {
+    const response = {
+      review: highReview,
+      passScore: 80,
+      message: "Review complete. Choose how to continue.",
+    };
+
+    expect(reviewApiResponseSchema.safeParse(response).success).toBe(true);
+    expect(
+      reviewApiResponseSchema.safeParse({
+        ...response,
+        finalText: "An automatic output must not be returned.",
+        wasRewritten: false,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps rewrite input as a separate validated draft-and-review contract", () => {
+    expect(
+      rewriteRequestSchema.safeParse({ draft: "Original supported facts.", review: highReview })
+        .success,
+    ).toBe(true);
+    expect(
+      rewriteRequestSchema.safeParse({
+        draft: "Original supported facts.",
+        review: { ...highReview, overallScore: 101 },
+      }).success,
+    ).toBe(false);
   });
 });
 

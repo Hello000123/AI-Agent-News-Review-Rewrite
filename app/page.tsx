@@ -20,13 +20,13 @@ export default function Home() {
 
       <div id="main-content" className="page-shell">
         <section className="hero" aria-labelledby="page-title">
-          <div className="eyebrow">AI press release assistant</div>
+          <div className="eyebrow">AI news-report assistant</div>
           <h1 id="page-title">
-            From rough draft to <span>press-ready.</span>
+            From rough draft to <span>publication-ready news.</span>
           </h1>
           <p className="hero-copy">
-            Get a clear quality assessment, practical feedback, and an automatic professional
-            rewrite when your draft needs work.
+            Get a clear quality assessment and practical feedback first. Then edit the draft
+            yourself or ask AI to turn the reviewed version into a news report.
           </p>
 
           <ol className="workflow-strip" aria-label="Review workflow">
@@ -49,8 +49,8 @@ export default function Home() {
             <li>
               <span>3</span>
               <div>
-                <strong>Use the best version</strong>
-                <small>Original or rewritten</small>
+                <strong>Choose your next step</strong>
+                <small>Edit or rewrite with AI</small>
               </div>
             </li>
           </ol>
@@ -59,7 +59,7 @@ export default function Home() {
         <PressReleaseWorkspace initialPassScore={passScore} />
 
         <footer>
-          <p>AI can make mistakes. Verify names, dates, quotations, statistics, and contact details.</p>
+          <p>AI can make mistakes. Verify names, dates, quotations, statistics, and attributions.</p>
           <p>No login, publishing, or draft history is included.</p>
         </footer>
       </div>
