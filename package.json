@@ -1,0 +1,36 @@
+{
+  "name": "simple-press-release-reviewer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A focused DeepSeek-powered press release review and rewrite workflow.",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "mock:deepseek": "node tests/mock-deepseek-server.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "test": "npm run typecheck && npm run lint && npm run test:unit && npm run build"
+  },
+  "dependencies": {
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.10",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "type": "module"
+}
