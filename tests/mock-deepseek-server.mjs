@@ -3,56 +3,83 @@ import { createServer } from "node:http";
 const port = Number(process.env.MOCK_DEEPSEEK_PORT || 4010);
 
 const lowReview = {
-  overallScore: 46,
-  contentScore: 50,
-  writingScore: 38,
-  structureScore: 41,
-  toneScore: 53,
-  clarityScore: 44,
+  overallScore: 41,
+  factualCompletenessScore: 52,
+  structureScore: 35,
+  clarityScore: 38,
+  languageQualityScore: 32,
+  professionalismScore: 36,
+  attributionScore: 48,
   scoreReasons: {
-    content: "The central announcement lacks essential supporting facts.",
-    clarity: "Fragments and repetition obscure the intended meaning.",
+    factualCompleteness: "The central announcement lacks essential supporting facts.",
     structure: "The draft lacks a clear lead and logical order.",
-    tone: "The wording is too informal for a professional news report.",
-    writing: "Grammar and punctuation errors require correction.",
+    clarity: "Fragments and repetition obscure the intended meaning.",
+    languageQuality: "Grammar and punctuation errors require correction.",
+    professionalism: "The wording is too informal for a professional news report.",
+    attribution: "Several claims are not tied clearly to an identified source.",
   },
+  readinessRisks: {
+    severelyIncompleteOrUnreliable: false,
+    seriousFactualGaps: false,
+    unsupportedClaims: false,
+    majorStructuralProblems: true,
+    veryPoorLanguage: true,
+    seriousAttributionOrQuotationProblems: false,
+  },
+  findings: [
+    {
+      category: "structure",
+      severity: "major",
+      issue: "The copy lacks a usable news lead and coherent paragraph sequence.",
+      evidence: "The opening consists of fragments and later paragraphs repeat the announcement.",
+      recommendation: "Lead with the verified announcement and reorder supporting facts.",
+    },
+    {
+      category: "languageQuality",
+      severity: "major",
+      issue: "Sentence construction and mechanics are below publication standard.",
+      evidence: "Fragments and punctuation errors interrupt comprehension.",
+      recommendation: "Rewrite complete sentences and perform a full language edit.",
+    },
+  ],
   decision: "REWRITE_REQUIRED",
   strengths: ["The central announcement can be identified."],
-  problems: [
-    "The opening does not clearly state the news.",
-    "Sentence fragments and repetition reduce readability.",
-  ],
-  missingInformation: [
-    "[Content - moderate] The responsible organisation and timing are not identified.",
-  ],
-  recommendations: [
-    "Lead with the announcement.",
-    "Use complete sentences and a professional news-report structure.",
-  ],
+  missingInformation: ["The responsible organisation and timing are not identified."],
+  recommendations: ["Lead with the announcement and rebuild the copy in a clear news order."],
 };
 
 const highReview = {
-  overallScore: 92,
-  contentScore: 93,
-  writingScore: 91,
-  structureScore: 92,
-  toneScore: 94,
-  clarityScore: 90,
+  overallScore: 91,
+  factualCompletenessScore: 91,
+  structureScore: 91,
+  clarityScore: 91,
+  languageQualityScore: 91,
+  professionalismScore: 91,
+  attributionScore: 91,
   scoreReasons: {
-    content: "The announcement is complete, specific, and internally consistent.",
-    clarity: "The draft communicates its meaning precisely and efficiently.",
+    factualCompleteness: "The event and supporting facts are complete and internally consistent.",
     structure: "The lead and supporting details follow a professional order.",
-    tone: "The language is factual, credible, and professional.",
-    writing: "Grammar, spelling, punctuation, and mechanics are polished.",
+    clarity: "The draft communicates its meaning precisely and efficiently.",
+    languageQuality: "Grammar, spelling, punctuation, and mechanics are polished.",
+    professionalism: "The language is factual, credible, and professional.",
+    attribution: "Claims and quotations are attributed clearly and consistently.",
   },
+  readinessRisks: {
+    severelyIncompleteOrUnreliable: false,
+    seriousFactualGaps: false,
+    unsupportedClaims: false,
+    majorStructuralProblems: false,
+    veryPoorLanguage: false,
+    seriousAttributionOrQuotationProblems: false,
+  },
+  findings: [],
   decision: "PASS",
   strengths: [
     "The announcement is prominent and specific.",
     "The draft uses a professional structure and tone.",
   ],
-  problems: [],
   missingInformation: [],
-  recommendations: ["Perform a final fact check before distribution."],
+  recommendations: ["[Optional - no score effect] Perform a final fact check before publication."],
 };
 
 let reviewCalls = 0;
@@ -73,10 +100,14 @@ function completion(content, finishReason = "stop") {
       {
         index: 0,
         finish_reason: finishReason,
-        message: { role: "assistant", content },
+        message: {
+          role: "assistant",
+          content,
+          reasoning_content: "PRIVATE_MOCK_REASONING_NOT_FOR_CLIENTS",
+        },
       },
     ],
-    model: "mock-deepseek-v4-flash",
+    model: "deepseek-v4-pro",
   };
 }
 
@@ -103,6 +134,27 @@ const server = createServer((request, response) => {
 
     const userContent =
       body.messages?.find((message) => message.role === "user")?.content || "";
+
+    if (!["deepseek-v4-pro", "deepseek-v4-flash"].includes(body.model)) {
+      sendJson(response, 400, {
+        error: {
+          message: `The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed ${String(body.model)}.`,
+          type: "invalid_request_error",
+          code: "invalid_request_error",
+        },
+      });
+      return;
+    }
+    if (body.thinking?.type !== "enabled" || body.reasoning_effort !== "max") {
+      sendJson(response, 400, {
+        error: {
+          message: "Mock requires thinking.enabled and reasoning_effort=max.",
+          type: "invalid_request_error",
+          code: "invalid_request_error",
+        },
+      });
+      return;
+    }
 
     if (userContent.includes("SIMULATE_AUTH_FAILURE")) {
       sendJson(response, 401, { error: { message: "Mock invalid key" } });
@@ -141,14 +193,19 @@ const server = createServer((request, response) => {
       sendJson(response, 400, { error: { message: "Mock rewrite payload was invalid" } });
       return;
     }
-    const originalDraft = String(payload.originalDraft ?? "").trim();
+    const originalDraft = String(payload.source?.primaryText ?? "").trim();
     const requiredLanguage = String(payload.requiredOutputLanguage ?? "");
     const headline = requiredLanguage.startsWith("Traditional Chinese")
-      ? "經審閱草稿的新聞報道"
+      ? "經審閱整理的新聞報道"
       : requiredLanguage.startsWith("Simplified Chinese")
-        ? "经审阅草稿改写的新闻报道"
+        ? "经审阅整理的新闻报道"
         : "News report based on the reviewed draft";
-    const rewrittenReport = [headline, "", originalDraft].join("\n");
+    const bodyPrefix = requiredLanguage.startsWith("Traditional Chinese")
+      ? "經編輯報道："
+      : requiredLanguage.startsWith("Simplified Chinese")
+        ? "经编辑报道："
+        : "Edited news report: ";
+    const rewrittenReport = [headline, "", bodyPrefix + originalDraft].join("\n");
     sendJson(response, 200, completion(rewrittenReport));
   });
 });

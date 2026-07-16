@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const input = reviewRequestSchema.parse(await readJsonRequest(request));
-    const result: ReviewApiResponse = await reviewDraft(input.draft);
+    const result: ReviewApiResponse = await reviewDraft(input);
     return jsonResponse(result);
   } catch (error) {
     return errorResponse(error);

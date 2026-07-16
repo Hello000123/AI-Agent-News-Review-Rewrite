@@ -45,6 +45,8 @@ body {
 }
 
 button,
+input,
+select,
 textarea {
   font: inherit;
 }
@@ -54,12 +56,14 @@ button {
 }
 
 button:disabled,
+input:disabled,
+select:disabled,
 textarea:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }
 
-:where(button, a, textarea):focus-visible {
+:where(button, a, input, select, textarea):focus-visible {
   outline: 3px solid rgba(23, 105, 224, 0.42);
   outline-offset: 3px;
 }
@@ -320,6 +324,7 @@ textarea:disabled {
 }
 
 .draft-textarea,
+.context-textarea,
 .output-textarea {
   display: block;
   width: 100%;
@@ -337,6 +342,41 @@ textarea:disabled {
 .draft-textarea {
   min-height: 300px;
   padding: 18px 19px;
+}
+
+.context-textarea {
+  min-height: 112px;
+  padding: 13px 15px;
+}
+
+.source-options-grid {
+  display: grid;
+  margin: 24px 0;
+  grid-template-columns: minmax(0, 1.6fr) minmax(210px, 0.8fr);
+  gap: 18px;
+}
+
+.source-options-grid input,
+.source-options-grid select,
+input[type="file"] {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: #ffffff;
+  color: var(--ink-strong);
+}
+
+input[type="file"] {
+  padding: 8px 10px;
+}
+
+.field-help {
+  margin: 7px 0 18px;
+  color: var(--subtle);
+  font-size: 12px;
 }
 
 .draft-textarea::placeholder {
@@ -520,6 +560,50 @@ textarea:disabled {
   font-size: 13px;
 }
 
+.loading-elapsed {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--subtle);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.error-panel > div:last-child {
+  min-width: 0;
+}
+
+.error-diagnostics {
+  display: grid;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  gap: 6px;
+  border: 1px solid rgba(122, 33, 25, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+}
+
+.error-diagnostics div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.error-diagnostics dt {
+  font-weight: 750;
+}
+
+.error-diagnostics dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.error-diagnostics .error-cause {
+  margin-top: 2px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(122, 33, 25, 0.14);
+}
+
 .error-symbol {
   display: grid;
   width: 30px;
@@ -693,7 +777,7 @@ textarea:disabled {
 .score-grid {
   display: grid;
   margin-top: 28px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   border: 1px solid var(--line);
   border-radius: 14px;
   overflow: hidden;
@@ -853,6 +937,92 @@ textarea:disabled {
   font-weight: 650;
 }
 
+.readiness-note {
+  font-weight: 700;
+}
+
+.quotation-failure-card {
+  padding: 28px;
+  border-color: #efb9b2;
+  background: #fffafa;
+}
+
+.quotation-failure-card > h2 {
+  margin: 4px 0 6px;
+  color: #7a2119;
+  font-size: 24px;
+}
+
+.quotation-failure-card > p {
+  margin: 0 0 20px;
+  color: var(--muted);
+}
+
+.quotation-issue-list {
+  display: grid;
+  margin-bottom: 20px;
+  gap: 14px;
+}
+
+.quotation-issue {
+  padding: 17px;
+  border: 1px solid #f0cbc6;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.quotation-issue h3 {
+  margin: 0 0 12px;
+  color: #7a2119;
+  font-size: 15px;
+}
+
+.quotation-issue dl,
+.quotation-issue dd {
+  margin: 0;
+}
+
+.quotation-issue dl {
+  display: grid;
+  gap: 10px;
+}
+
+.quotation-issue dt {
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.quotation-issue dd {
+  color: var(--ink-strong);
+  overflow-wrap: anywhere;
+}
+
+.candidate-draft {
+  margin: 18px 0;
+}
+
+.candidate-draft label {
+  display: block;
+  margin-bottom: 8px;
+  color: #7a2119;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.candidate-draft textarea {
+  width: 100%;
+  min-height: 260px;
+  padding: 16px;
+  resize: vertical;
+  border: 1px solid #efb9b2;
+  border-radius: 12px;
+  background: #fffdfd;
+  color: var(--ink);
+}
+
 footer {
   display: flex;
   padding: 34px 0 42px;
@@ -911,7 +1081,6 @@ footer p {
   }
 
   .score-tile:last-child {
-    grid-column: 1 / -1;
     border-bottom: 0;
     border-right: 0;
   }
@@ -968,6 +1137,7 @@ footer p {
 
   .input-card,
   .review-card,
+  .quotation-failure-card,
   .output-card {
     padding: 22px 18px;
     border-radius: 16px;
@@ -986,6 +1156,11 @@ footer p {
 
   .draft-textarea {
     min-height: 260px;
+  }
+
+  .source-options-grid {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 
   .input-meta,

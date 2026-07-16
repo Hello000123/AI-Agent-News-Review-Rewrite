@@ -70,7 +70,11 @@ export function errorResponse(error: unknown) {
 
   if (isAppError(error)) {
     const body: ApiErrorResponse = {
-      error: { code: error.code, message: error.publicMessage },
+      error: {
+        code: error.code,
+        message: error.publicMessage,
+        ...error.publicDetails,
+      },
     };
     return jsonResponse(body, error.status);
   }

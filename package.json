@@ -16,6 +16,7 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "eval:live": "node --experimental-strip-types tests/live-rewrite-evaluation.mjs",
+    "eval:review:live": "node --experimental-strip-types tests/live-review-evaluation.mjs",
     "test": "npm run typecheck && npm run lint && npm run test:unit && npm run build"
   },
   "dependencies": {

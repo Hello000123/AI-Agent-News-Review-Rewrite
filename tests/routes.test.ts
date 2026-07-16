@@ -2,8 +2,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { POST as reviewRoute } from "@/app/api/review/route";
 import { POST as rewriteRoute } from "@/app/api/rewrite/route";
-import { MAX_DRAFT_CHARS, MAX_REQUEST_BYTES } from "@/lib/shared/contracts";
-import { highReview, lowReview } from "@/tests/fixtures/reviews";
+import {
+  MAX_DRAFT_CHARS,
+  MAX_REQUEST_BYTES,
+  type ReviewResult,
+  type SourceSnapshot,
+} from "@/lib/shared/contracts";
+import {
+  highReview,
+  highReviewModelResponse,
+  lowReviewModelResponse,
+} from "@/tests/fixtures/reviews";
+
+const PUBLIC_SOURCE_URL = "https://93.184.216.34/reference-article";
+
+const rewriteSource: SourceSnapshot = {
+  primaryText: "Officials confirmed the supported update.",
+  userDraft: "Officials confirmed the supported update.",
+  sourceUrl: "https://news.example/reference",
+  linkedTitle: "Supporting reference",
+  linkedText: "The source supports the confirmed update.",
+  imageContext: [
+    { label: "User caption", text: "Officials at the briefing.", source: "user_caption" },
+  ],
+};
 
 function request(pathname: string, body: string, contentType = "application/json") {
   return new Request("http://localhost" + pathname, {
@@ -16,15 +38,36 @@ function request(pathname: string, body: string, contentType = "application/json
 function completionResponse(content: string) {
   return new Response(
     JSON.stringify({
-      choices: [{ finish_reason: "stop", message: { content } }],
+      choices: [
+        {
+          finish_reason: "stop",
+          message: { content, reasoning_content: "PRIVATE_REASONING_MARKER" },
+        },
+      ],
     }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
 }
 
+function providerCall(fetchMock: ReturnType<typeof vi.fn>) {
+  const call = fetchMock.mock.calls.find(([url]) =>
+    String(url).includes("/chat/completions"),
+  );
+  if (!call) throw new Error("Expected a DeepSeek provider call.");
+  return call as unknown as [string, RequestInit];
+}
+
 function providerRequestBody(fetchMock: ReturnType<typeof vi.fn>) {
-  const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-  return JSON.parse(String(init.body)) as Record<string, unknown>;
+  const [, init] = providerCall(fetchMock);
+  return JSON.parse(String(init.body)) as {
+    response_format?: unknown;
+    messages: Array<{ role: string; content: string }>;
+  };
+}
+
+function providerUserPrompt(fetchMock: ReturnType<typeof vi.fn>) {
+  const body = providerRequestBody(fetchMock);
+  return body.messages.find(({ role }) => role === "user")?.content ?? "";
 }
 
 async function responseErrorCode(response: Response) {
@@ -32,22 +75,25 @@ async function responseErrorCode(response: Response) {
   return body.error?.code;
 }
 
-describe("review API route validation", () => {
+describe("review and rewrite API routes", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
-  it("returns a failing review after exactly one Review Agent call without rewriting", async () => {
+  it("returns a calibrated failing review after exactly one Review Agent call", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
-    const fetchMock = vi.fn().mockResolvedValue(completionResponse(JSON.stringify(lowReview)));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(completionResponse(JSON.stringify(lowReviewModelResponse)));
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await reviewRoute(
       request("/api/review", JSON.stringify({ draft: "we got update. more soon." })),
     );
     const body = (await response.json()) as Record<string, unknown> & {
-      review: { decision: string };
+      review: ReviewResult;
+      source: SourceSnapshot;
     };
 
     expect(response.status).toBe(200);
@@ -55,54 +101,248 @@ describe("review API route validation", () => {
     expect(providerRequestBody(fetchMock)).toHaveProperty("response_format", {
       type: "json_object",
     });
-    expect(body.review.decision).toBe("REWRITE_REQUIRED");
+    expect(body.review).toMatchObject({
+      overallScore: 41,
+      weightedScore: 41,
+      appliedScoreCap: 59,
+      readinessBand: "WEAK",
+      decision: "REWRITE_REQUIRED",
+    });
+    expect(body.source).toEqual({
+      primaryText: "we got update. more soon.",
+      userDraft: "we got update. more soon.",
+      imageContext: [],
+    });
     expect(body).not.toHaveProperty("finalText");
     expect(body).not.toHaveProperty("wasRewritten");
   });
 
-  it("returns a passing review after exactly one Review Agent call without final output", async () => {
+  it("accepts full editorial input and returns the retrieved source snapshot it reviewed", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
-    const fetchMock = vi.fn().mockResolvedValue(completionResponse(JSON.stringify(highReview)));
+    const sourceHtml = `
+      <html><head><meta property="og:title" content="Reference headline"></head><body>
+        <article itemprop="articleBody">
+          <h1>Reference headline</h1>
+          <p>The retrieved reference confirms the pilot was completed after an independent review and supplies supporting context for the submitted copy.</p>
+          <figure><img alt="Officials presenting the pilot"><figcaption>Officials at the briefing.</figcaption></figure>
+        </article>
+      </body></html>`;
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      if (String(url) === PUBLIC_SOURCE_URL) {
+        return new Response(sourceHtml, {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+      return completionResponse(JSON.stringify(highReviewModelResponse));
+    });
     vi.stubGlobal("fetch", fetchMock);
 
+    const editorialInput = {
+      draft: "The submitted draft says the pilot is complete.",
+      sourceUrl: PUBLIC_SOURCE_URL,
+      imageContext: [
+        { label: "User image caption", text: "A briefing was held.", source: "user_caption" },
+        { label: "User image OCR", text: "Pilot complete", source: "ocr_text" },
+      ],
+      outputLanguage: "traditional_chinese",
+    } as const;
     const response = await reviewRoute(
-      request("/api/review", JSON.stringify({ draft: "Acme announced a verified update." })),
+      request("/api/review", JSON.stringify(editorialInput)),
     );
-    const body = (await response.json()) as Record<string, unknown> & {
-      review: { decision: string };
+    const body = (await response.json()) as {
+      review: ReviewResult;
+      source: SourceSnapshot;
+      passScore: number;
     };
 
     expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(providerRequestBody(fetchMock)).toHaveProperty("response_format", {
-      type: "json_object",
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(body.review).toMatchObject({ overallScore: 91, decision: "PASS" });
+    expect(body.source).toMatchObject({
+      primaryText: editorialInput.draft,
+      userDraft: editorialInput.draft,
+      sourceUrl: PUBLIC_SOURCE_URL,
+      linkedTitle: "Reference headline",
+      linkedText: expect.stringContaining("retrieved reference confirms the pilot"),
     });
-    expect(body.review.decision).toBe("PASS");
-    expect(body).not.toHaveProperty("finalText");
-    expect(body).not.toHaveProperty("wasRewritten");
+    expect(body.source.imageContext).toEqual(
+      expect.arrayContaining([
+        editorialInput.imageContext[0],
+        editorialInput.imageContext[1],
+        expect.objectContaining({
+          source: "link_caption",
+          text: expect.stringContaining("Officials presenting the pilot"),
+        }),
+      ]),
+    );
+
+    const providerBody = providerRequestBody(fetchMock);
+    expect(providerBody).toHaveProperty("response_format", { type: "json_object" });
+    const userPrompt = providerUserPrompt(fetchMock);
+    expect(userPrompt).toContain(editorialInput.draft);
+    expect(userPrompt).toContain(PUBLIC_SOURCE_URL);
+    expect(userPrompt).toContain("Reference headline");
+    expect(userPrompt).toContain("retrieved reference confirms the pilot");
+    expect(userPrompt).toContain("A briefing was held.");
   });
 
-  it("runs the Rewrite Agent once through the separate rewrite endpoint", async () => {
+  it("uses source and outputLanguage and rewrites even when the review score is high", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
-    const finalText = "Concise headline\n\nA clear news report body.";
+    const finalText =
+      "Supported update confirmed\n\nOfficials confirmed the supported update in a clearer report.";
     const fetchMock = vi.fn().mockResolvedValue(completionResponse(finalText));
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await rewriteRoute(
       request(
         "/api/rewrite",
-        JSON.stringify({ draft: "Original supported facts.", review: highReview }),
+        JSON.stringify({
+          source: rewriteSource,
+          review: highReview,
+          outputLanguage: "english",
+        }),
       ),
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ finalText });
+    expect(await response.json()).toEqual({
+      finalText,
+      validation: { status: "passed", attempts: 1 },
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(providerRequestBody(fetchMock)).not.toHaveProperty("response_format");
+    const userPrompt = providerUserPrompt(fetchMock);
+    expect(userPrompt).toContain("LANGUAGE LOCK: English");
+    expect(userPrompt).toContain('"primaryText": "Officials confirmed the supported update."');
+    expect(userPrompt).toContain('"requiredOutputLanguage": "English"');
+    expect(userPrompt).toContain('"sourceUrl": "https://news.example/reference"');
   });
 
-  it("returns a validation error for empty input", async () => {
-    const response = await reviewRoute(request("/api/review", JSON.stringify({ draft: "   " })));
+  it.each([
+    {
+      language: "English",
+      draft:
+        "The city library opened a new reading room on Thursday. The library said the space will host free community workshops.",
+      rewritten:
+        "City library opens community reading room\n\nThe city library opened a new reading room on Thursday and said the space will host free community workshops.",
+    },
+    {
+      language: "Traditional Chinese",
+      draft: "市立圖書館周四啟用新的閱讀室。館方表示，該空間將舉辦免費社區工作坊。",
+      rewritten:
+        "市立圖書館啟用社區閱讀室\n\n市立圖書館周四啟用新的閱讀室，館方表示該空間將舉辦免費社區工作坊。",
+    },
+  ])("completes the $language Review and Rewrite chain", async ({ draft, rewritten }) => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(completionResponse(JSON.stringify(highReviewModelResponse)))
+      .mockResolvedValueOnce(completionResponse(rewritten));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const reviewResponse = await reviewRoute(
+      request("/api/review", JSON.stringify({ draft, outputLanguage: "original" })),
+    );
+    expect(reviewResponse.status).toBe(200);
+    const reviewed = (await reviewResponse.json()) as {
+      review: ReviewResult;
+      source: SourceSnapshot;
+    };
+
+    const rewriteResponse = await rewriteRoute(
+      request(
+        "/api/rewrite",
+        JSON.stringify({
+          source: reviewed.source,
+          review: reviewed.review,
+          outputLanguage: "original",
+        }),
+      ),
+    );
+    expect(rewriteResponse.status).toBe(200);
+    const rewrittenBody = (await rewriteResponse.json()) as { finalText: string };
+    expect(rewrittenBody.finalText).toBe(rewritten);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(reviewed)).not.toContain("PRIVATE_REASONING_MARKER");
+    expect(JSON.stringify(rewrittenBody)).not.toContain("PRIVATE_REASONING_MARKER");
+  });
+
+  it("returns complete safe diagnostics for a deliberately invalid model", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("DEEPSEEK_MODEL", "invalid-model-diagnostic");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            message:
+              "The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed invalid-model-diagnostic.",
+            type: "invalid_request_error",
+            code: "invalid_request_error",
+          },
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await reviewRoute(
+      request("/api/review", JSON.stringify({ draft: "Test invalid model handling." })),
+    );
+    const body = (await response.json()) as {
+      error: Record<string, unknown>;
+    };
+
+    expect(response.status).toBe(502);
+    expect(body.error).toMatchObject({
+      code: "DEEPSEEK_MODEL_ERROR",
+      stage: "review_request",
+      provider: "DeepSeek",
+      model: "invalid-model-diagnostic",
+      httpStatus: 400,
+      retryable: false,
+      causeSummary: expect.stringContaining("Supported model IDs"),
+    });
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("test-key");
+    expect(serialized).not.toContain("Authorization");
+    expect(serialized).not.toContain("PRIVATE_REASONING_MARKER");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when model scores are missing, non-numeric, or out of range", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    for (const malformedReview of [
+      { ...highReviewModelResponse, clarityScore: "91" },
+      { ...highReviewModelResponse, clarityScore: 101 },
+      Object.fromEntries(
+        Object.entries(highReviewModelResponse).filter(([key]) => key !== "clarityScore"),
+      ),
+    ]) {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(completionResponse(JSON.stringify(malformedReview)));
+      vi.stubGlobal("fetch", fetchMock);
+      const response = await reviewRoute(
+        request("/api/review", JSON.stringify({ draft: "Complete submitted copy." })),
+      );
+      expect(response.status).toBe(502);
+      expect(await responseErrorCode(response)).toBe("INVALID_REVIEW_FORMAT");
+      expect(fetchMock).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("returns a validation error for empty editorial input", async () => {
+    const response = await reviewRoute(
+      request(
+        "/api/review",
+        JSON.stringify({
+          draft: "   ",
+          sourceUrl: "",
+          imageContext: [],
+          outputLanguage: "original",
+        }),
+      ),
+    );
     expect(response.status).toBe(400);
     expect(await responseErrorCode(response)).toBe("VALIDATION_ERROR");
   });

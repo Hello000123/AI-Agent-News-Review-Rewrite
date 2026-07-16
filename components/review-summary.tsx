@@ -58,21 +58,34 @@ export function ReviewSummary({
   onRewrite,
   onEditDraft,
 }: ReviewSummaryProps) {
-  const passed = review.overallScore >= passScore;
+  const passed = review.decision === "PASS";
   const scores: ScoreItem[] = [
-    { label: "Content & facts (40%)", score: review.contentScore },
-    { label: "Clarity & readability (20%)", score: review.clarityScore },
+    { label: "Facts & support (25%)", score: review.factualCompletenessScore },
     { label: "Structure & organisation (20%)", score: review.structureScore },
-    { label: "Professional tone (15%)", score: review.toneScore },
-    { label: "Grammar & mechanics (5%)", score: review.writingScore },
+    { label: "Clarity & readability (15%)", score: review.clarityScore },
+    { label: "Grammar & language (15%)", score: review.languageQualityScore },
+    { label: "News professionalism (15%)", score: review.professionalismScore },
+    { label: "Attribution & quotations (10%)", score: review.attributionScore },
   ];
   const scoreReasons = [
-    "Content & facts: " + review.scoreReasons.content,
-    "Clarity & readability: " + review.scoreReasons.clarity,
+    "Facts & support: " + review.scoreReasons.factualCompleteness,
     "Structure & organisation: " + review.scoreReasons.structure,
-    "Professional tone: " + review.scoreReasons.tone,
-    "Grammar & mechanics: " + review.scoreReasons.writing,
+    "Clarity & readability: " + review.scoreReasons.clarity,
+    "Grammar & language: " + review.scoreReasons.languageQuality,
+    "News professionalism: " + review.scoreReasons.professionalism,
+    "Attribution & quotations: " + review.scoreReasons.attribution,
   ];
+  const findings = review.findings.map(
+    ({ category, severity, issue, evidence, recommendation }) =>
+      `[${category} — ${severity}] ${issue} Evidence: ${evidence} Action: ${recommendation}`,
+  );
+  const readinessLabel = {
+    PUBLICATION_READY: "Publication-ready",
+    STRONG_LIMITED_EDITING: "Strong — limited editing needed",
+    SUBSTANTIAL_REWRITE: "Usable — substantial rewrite needed",
+    WEAK: "Weak draft",
+    SEVERELY_DEFICIENT: "Severely deficient",
+  }[review.readinessBand];
   const scoreStyle = { "--score": rounded(review.overallScore) + "%" } as CSSProperties;
 
   return (
@@ -88,8 +101,8 @@ export function ReviewSummary({
           <div>
             <strong>Review applies to an earlier version</strong>
             <p>
-              You changed the draft after this review. Review the edited draft again before
-              requesting an AI rewrite.
+              You changed the draft, source URL, or image text after this review. Review the
+              updated source input again before requesting an AI rewrite.
             </p>
           </div>
         </div>
@@ -115,7 +128,13 @@ export function ReviewSummary({
             {passed ? "Review complete" : "Review complete — changes recommended"}
           </h2>
           <p>{message}</p>
+          <p className="readiness-note">Readiness: {readinessLabel}</p>
           <p className="threshold-note">Pass threshold: {passScore}/100</p>
+          {review.appliedScoreCap !== null ? (
+            <p className="threshold-note">
+              Consistency cap: {review.appliedScoreCap}/100 — {review.scoreCapReasons.join(" ")}
+            </p>
+          ) : null}
         </div>
         <div className="decision-actions">
           <button
@@ -155,7 +174,7 @@ export function ReviewSummary({
       <div className="feedback-grid">
         <FeedbackList title="Score rationale" items={scoreReasons} variant="neutral" />
         <FeedbackList title="Strengths" items={review.strengths} variant="positive" />
-        <FeedbackList title="Problems" items={review.problems} variant="warning" />
+        <FeedbackList title="Findings" items={findings} variant="warning" />
         <FeedbackList
           title="Missing or unclear information"
           items={review.missingInformation}

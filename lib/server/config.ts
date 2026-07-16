@@ -1,7 +1,8 @@
 export const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro";
 export const DEFAULT_REVIEW_PASS_SCORE = 80;
-export const DEFAULT_TIMEOUT_MS = 90_000;
+export const DEFAULT_TIMEOUT_MS = 600_000;
+export const DEFAULT_STREAM_RESPONSES = true;
 
 export interface ServerConfig {
   apiKey: string;
@@ -9,6 +10,7 @@ export interface ServerConfig {
   model: string;
   passScore: number;
   timeoutMs: number;
+  streamResponses: boolean;
 }
 
 function integerInRange(rawValue: string | undefined, fallback: number, minimum: number, maximum: number) {
@@ -20,6 +22,13 @@ function integerInRange(rawValue: string | undefined, fallback: number, minimum:
 
 export function getReviewPassScore() {
   return integerInRange(process.env.REVIEW_PASS_SCORE, DEFAULT_REVIEW_PASS_SCORE, 0, 100);
+}
+
+function booleanSetting(rawValue: string | undefined, fallback: boolean) {
+  if (!rawValue?.trim()) return fallback;
+  if (rawValue.trim().toLowerCase() === "true") return true;
+  if (rawValue.trim().toLowerCase() === "false") return false;
+  return fallback;
 }
 
 function normalizeBaseUrl(rawValue: string | undefined) {
@@ -42,5 +51,6 @@ export function getServerConfig(): ServerConfig {
     model: process.env.DEEPSEEK_MODEL?.trim() || DEFAULT_DEEPSEEK_MODEL,
     passScore: getReviewPassScore(),
     timeoutMs: integerInRange(process.env.DEEPSEEK_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 600_000),
+    streamResponses: booleanSetting(process.env.DEEPSEEK_STREAM, DEFAULT_STREAM_RESPONSES),
   };
 }

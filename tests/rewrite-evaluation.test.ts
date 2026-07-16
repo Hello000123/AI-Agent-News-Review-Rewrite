@@ -66,6 +66,20 @@ describe("bilingual rewrite evaluation set", () => {
     expect(result.failures).toContain("New number or statistic invented: 121");
   });
 
+  it("accepts exact Chinese and English numeric-unit equivalents", () => {
+    const testCase = rewriteEvaluationCases.find(
+      ({ id }) => id === "mixed_language_proper_nouns",
+    );
+    expect(testCase).toBeDefined();
+
+    const result = evaluateRewriteOutput(
+      testCase!,
+      `Blue Harbour AI測試涉350萬筆記錄\n\n${testCase!.draft}`,
+    );
+
+    expect(result).toEqual({ passed: true, failures: [] });
+  });
+
   it("detects press-release artifacts, outlet attribution, markdown, and injection obedience", () => {
     const testCase = rewriteEvaluationCases.find(
       ({ id }) => id === "prompt_injection_attempt",

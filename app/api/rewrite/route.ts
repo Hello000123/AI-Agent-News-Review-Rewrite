@@ -8,8 +8,11 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const input = rewriteRequestSchema.parse(await readJsonRequest(request));
-    const finalText = await rewriteWithFeedback(input.draft, input.review);
-    const result: RewriteApiResponse = { finalText };
+    const result: RewriteApiResponse = await rewriteWithFeedback(
+      input.source,
+      input.review,
+      input.outputLanguage,
+    );
     return jsonResponse(result);
   } catch (error) {
     return errorResponse(error);

@@ -2,11 +2,11 @@
 
 PressReady is a focused local website for one workflow:
 
-    Draft input → Review Agent → Score and feedback → Edit yourself or request Rewrite Agent → Final news report
+    Text, public URL, and image text → Review Agent → Calibrated score and feedback → Explicit rewrite → Validated news report
 
-The Review Agent scores a draft once and returns the complete structured review immediately. Rewriting never starts automatically. After every review, the user can edit the populated draft or explicitly ask the Rewrite Agent to turn the immutable reviewed version into a publication-quality news report.
+The Review Agent scores the submitted copy once and returns a structured assessment. Rewriting never starts automatically and is never skipped because a review score is high: after either a high or low score, the user can explicitly request a Rewrite Agent call or return to the source input. The rewrite uses the immutable source snapshot that produced the displayed review.
 
-The project is intentionally limited to this workflow. It has no login, database, user history, news search, language switcher, dark theme, publishing, distribution, or scheduled work.
+The project is intentionally limited to this workflow. It has no login, database, user history, news search, dark theme, publishing, distribution, or scheduled work. The output selector supports the source language, Traditional Chinese (Hong Kong), or English.
 
 ## Technology stack
 
@@ -30,19 +30,23 @@ No DeepSeek SDK, UI framework, database, or separate Express server is required.
       page.tsx                  Server-rendered page shell
     components/
       press-release-workspace.tsx  Client workflow and interaction state
+      quotation-failure-panel.tsx  Actionable quotation-validation failures
       review-summary.tsx           Scores and written feedback
       output-panel.tsx              Final output and actions
     lib/
       client/api.ts             Safe browser-to-backend requests
-      server/agents/            DeepSeek client, prompts, agents, workflow
+      server/agents/            DeepSeek client, prompts, agents, workflow, quotation validation
+      server/sources/           Bounded public-URL retrieval and source extraction
       server/config.ts          Environment configuration
       server/errors.ts          Safe typed errors
       server/http.ts            Request limits and error responses
       shared/contracts.ts       Shared Zod contracts and TypeScript types
     tests/
-      fixtures/                 Valid review fixtures
+      fixtures/                 Review and rewrite evaluation fixtures
       *.test.ts                 Unit and API validation tests
       mock-deepseek-server.mjs  Local browser-test provider
+      live-review-evaluation.mjs   Repeatable live review scoring harness
+      live-rewrite-evaluation.mjs  Repeatable live rewrite harness
     .env.example
     package.json
 
@@ -69,7 +73,7 @@ Required:
 | Variable | Example | Purpose |
 | --- | --- | --- |
 | DEEPSEEK_API_KEY | your-key | Server-only DeepSeek credential |
-| DEEPSEEK_MODEL | deepseek-v4-flash | Model used by both agents |
+| DEEPSEEK_MODEL | deepseek-v4-pro | Model used by both agents |
 | REVIEW_PASS_SCORE | 80 | Overall score used to label a review as passing |
 
 Optional server settings:
@@ -77,28 +81,33 @@ Optional server settings:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | DEEPSEEK_API_BASE_URL | https://api.deepseek.com | DeepSeek base URL; useful for isolated mock testing |
-| DEEPSEEK_TIMEOUT_MS | 90000 | Abort timeout in milliseconds, from 1,000 to 600,000 |
+| DEEPSEEK_TIMEOUT_MS | 600000 | Per-completion abort timeout in milliseconds, from 1,000 to 600,000 |
+| DEEPSEEK_STREAM | true | Stream the provider response so long reasoning remains active; `false` keeps the supported non-streaming parser |
 
-Invalid pass scores fall back to 80. Invalid timeouts fall back to 90 seconds. Restart the development server after changing environment variables.
+Invalid pass scores fall back to 80. Invalid timeouts fall back to 600 seconds. Invalid stream values fall back to `true`. Restart the development server after changing environment variables.
 
 ## DeepSeek API configuration
 
-As of July 13, 2026, the official OpenAI-compatible endpoint is:
+As of July 16, 2026, the official OpenAI-compatible endpoint is:
 
     POST https://api.deepseek.com/chat/completions
 
-The example configuration uses deepseek-v4-flash, the current faster and more economical V4 model. Set DEEPSEEK_MODEL=deepseek-v4-pro when maximum writing quality is more important than latency and cost. The retired-soon legacy aliases deepseek-chat and deepseek-reasoner are deliberately not used.
+The current project configuration uses the official `deepseek-v4-pro` model ID for both agents. The authenticated `GET https://api.deepseek.com/models` endpoint lists both `deepseek-v4-pro` and `deepseek-v4-flash`; the application never silently falls back if the configured model is rejected.
 
-Both calls explicitly disable thinking mode for predictable latency:
+Both calls explicitly enable thinking and select the highest documented effort:
 
-    thinking: { "type": "disabled" }
+    thinking: { "type": "enabled" }
+    reasoning_effort: "max"
 
-The review call enables JSON Output and validates the result with a strict schema. The rewrite call requests normal text. The server rejects empty, truncated, malformed, or incomplete provider responses.
+DeepSeek returns private thinking in `reasoning_content` and the final answer in `content`. The server discards `reasoning_content` and exposes only the final answer. Upstream streaming is enabled by default and parses `delta.reasoning_content`, `delta.content`, keep-alive comments, and `[DONE]`; non-streaming `message.reasoning_content`/`message.content` responses remain supported. The review call enables JSON Output and validates the result with a strict schema. The rewrite call requests normal text. Both use a 64,000-token completion budget so maximum-effort reasoning has room to finish before the final answer.
 
 Official references:
 
 - [DeepSeek quick start](https://api-docs.deepseek.com/)
 - [Chat Completions reference](https://api-docs.deepseek.com/api/create-chat-completion/)
+- [Available models endpoint](https://api-docs.deepseek.com/api/list-models/)
+- [Thinking mode and effort control](https://api-docs.deepseek.com/guides/thinking_mode/)
+- [Rate limits and keep-alive behavior](https://api-docs.deepseek.com/quick_start/rate_limit/)
 - [Models and pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 - [JSON Output guide](https://api-docs.deepseek.com/guides/json_mode/)
 - [Error codes](https://api-docs.deepseek.com/quick_start/error_codes/)
@@ -109,7 +118,7 @@ Official references:
 
 Open [http://localhost:3000](http://localhost:3000).
 
-The browser sends drafts only to the local Next.js backend. The backend calls DeepSeek with the secret key. The key is never included in browser source, browser requests, API error bodies, or application logs.
+The browser sends submitted text, the public source URL, image captions or OCR text, and the output-language selection only to the local Next.js backend. Image bytes stay in the browser because DeepSeek V4 is text-only; only the user-provided visual description or OCR is sent. The backend retrieves public URL content and calls DeepSeek with the server-only secret key. The key is never included in browser source, browser requests, API error bodies, or application logs.
 
 ## Production build
 
@@ -122,47 +131,79 @@ The production server also starts at [http://localhost:3000](http://localhost:30
 
 REVIEW_PASS_SCORE defaults to 80.
 
-- `/api/review` invokes only the Review Agent, exactly once, for both passing and failing drafts.
-- Every valid result immediately shows the score, category rationale, strengths, problems, missing information, recommendations, and the actions `Rewrite with AI` and `Edit draft myself`.
-- `Rewrite with AI` separately calls `/api/rewrite` with the immutable reviewed draft and its matching validated review.
-- `Edit draft myself` only focuses the populated editor. It makes no AI request and keeps the latest review visible.
-- Once the draft changes, the review is marked as applying to an earlier version. AI rewriting stays disabled until the edited draft is reviewed again.
-- The final-output panel appears only after a successful, explicit AI rewrite request. A rewrite error preserves the draft, review, feedback, and both actions.
+- `/api/review` builds one immutable source snapshot and invokes only the Review Agent. It never starts a rewrite.
+- If text and a URL are both supplied, the submitted text is the copy being scored and the retrieved article is supporting reference material. For a URL-only request, the extracted article becomes the primary copy. Verified image captions or OCR can supplement either form and can be the primary source when no text or usable linked article is available.
+- Every valid result shows the final score, uncapped weighted score, any deterministic cap and reasons, readiness band, six category rationales, structured findings, strengths, missing information, and recommendations.
+- Both a passing/high score and a failing/low score expose `Rewrite with AI`. Clicking it makes a separate `/api/rewrite` request unless another request is already running or the reviewed source has since changed. A score never causes an automatic rewrite and never suppresses an explicit rewrite.
+- Editing text, the URL, or image text clears any displayed rewrite immediately and marks the existing review as stale; a new review is required before rewriting that changed source. Changing only the output-language selection clears the old rewrite and allows a fresh rewrite from the same reviewed source.
+- Starting a review or rewrite clears the prior output state. Request sequence IDs discard late responses, and rewrite failures never restore an older successful output.
 
-The Review Agent returns PASS or REWRITE_REQUIRED, but the backend recalculates both the authoritative weighted overall score and the decision. The weighting is:
+The Review Agent returns category scores and findings, but the backend computes the authoritative weighted and final scores, readiness band, and decision. The weighting is:
 
-- content and core-announcement completeness: 40% (25% factual consistency and 15% completeness);
-- clarity and readability: 20%;
-- structure and organisation: 20%;
-- professional tone: 15%;
-- grammar and mechanics: 5%.
+- factual completeness and support: 25%;
+- structure and logical flow: 20%;
+- clarity and readability: 15%;
+- grammar and language quality: 15%;
+- news-writing professionalism: 15%;
+- attribution and quotation handling: 10%.
 
-The backend rounds the weighted result to the nearest whole number, then compares it with REVIEW_PASS_SCORE. This prevents model arithmetic or a contradictory decision from changing the configured workflow.
+Before weighting, the backend lowers any category score that contradicts the severity of a finding or its readiness-risk flag; it never raises a model score. The consistency-normalized weighted score is rounded to the nearest whole number. Deterministic safeguards then apply the lowest relevant cap:
+
+- 39 for a critical finding or a draft marked severely incomplete or unreliable;
+- 59 for a major finding, serious factual gap, unsupported material claim, major structural problem, very poor language, or serious attribution/quotation problem;
+- 74 for a moderate finding, necessary missing information, or a category below 60;
+- 89 for a minor material finding, a category below 75, or a non-optional recommendation with no matching structured finding.
+
+The final score is the lower of the weighted score and applicable cap. Readiness bands are 90–100 publication-ready, 75–89 strong with limited editing, 60–74 requiring substantial rewriting, 40–59 weak, and 0–39 severely deficient. The backend compares the final score—not the model's claimed arithmetic or decision—with REVIEW_PASS_SCORE.
 
 ## Agent behavior
 
 The Review Agent:
 
 - evaluates without rewriting;
-- scores content, clarity, structure, tone, and writing mechanics using fixed weights and published score bands;
-- distinguishes intrinsic writing quality from the work needed to convert source material into a news report;
+- scores the exact submitted copy across the six fixed categories and published readiness bands;
+- treats retrieved articles and image text as separately labelled evidence rather than transferring a publisher's reputation or reference prose quality to a user draft;
 - applies equivalent standards across languages and ignores publisher reputation;
 - treats media contacts, boilerplates, executive quotations, formal datelines, and calls to action as optional unless essential to the specific announcement;
-- returns a required rationale for every category score, plus strengths, problems, missing information, and recommendations;
+- returns a required rationale for every category score, explicit readiness-risk flags, structured category/severity findings, strengths, missing information, and recommendations;
 - uses temperature 0 for the most repeatable scoring the configured provider can offer;
 - returns strict JSON only.
 
 The Rewrite Agent:
 
-- receives the original draft plus validated review feedback;
-- treats the original draft as the factual source of truth and feedback only as editing guidance;
+- receives the immutable primary source, relevant retrieved link and image-text context, validated review feedback, and selected output language;
+- treats source material as factual input and review feedback only as editing guidance;
 - creates a concise factual headline, strong lead, inverted-pyramid structure, short paragraphs, and neutral newsroom language;
 - preserves material supported facts, exact direct quotations, names, dates, numbers, attribution, uncertainty, language, and script;
 - never invents facts, translations, context, causal links, quotations, or placeholders;
 - removes promotional repetition and press-release artifacts without dropping material facts;
-- returns only a headline, one blank line, and the news-report body.
+- rejects an empty or malformed candidate, a wrong-language result, changed or untraceable source numbers, omitted or romanized mandatory source-script names, omitted mandatory mixed-language terms, invented direct speech, or an exact/whitespace-only/punctuation-only source copy;
+- checks high-confidence named-speaker attribution beside exact preserved quotations in English and Chinese, and routes a reassignment or lost attribution through the same single bounded source-fidelity correction;
+- treats exact Chinese/English powers-of-ten and small English number-word equivalents as the same figure during translation (for example, `5.8萬` and `58,000`) while retaining invented-number checks;
+- returns only a headline, one blank line, and the news-report body after validation.
 
-User drafts and feedback are wrapped as JSON data in the prompts and explicitly treated as untrusted content. Generated output is rendered as plain textarea text; HTML is never injected.
+User drafts, retrieved source material, image text, and feedback are wrapped as JSON data in the prompts and explicitly treated as untrusted content. Generated output is rendered as plain textarea text; HTML is never injected.
+
+## Quotation preservation and retry behavior
+
+The quotation validator parses `「……」`, `『……』`, `“……”`, `‘……’`, and guarded ASCII quote forms. It uses attribution and sentence-level context to distinguish direct quotations from short labels, supports nested and repeated quotations, and allocates duplicate matches one-to-one. Leading or trailing whitespace and normalized Unicode punctuation forms do not create false failures, but wording and internal punctuation must remain exact.
+
+Validation identifies modified, omitted, split, merged, and punctuation-changed quotations. If the first rewrite is unchanged or fails deterministic format, language, name, number, or quotation validation, the backend makes one focused correction request, for at most two Rewrite Agent calls in that user request; there is no unlimited retry loop. Format, source-name, source-echo, and quotation retries use narrowly scoped correction instructions. If that focused correction returns a factual multi-sentence body without a headline, the backend can restore the already-safe first headline or derive one from the corrected body's first factual clause, then rerun every validator; numeric thousands separators are kept intact. A final punctuation-only quotation mismatch can be repaired deterministically by replacing only the validator-confirmed quote span with the exact source span; wording or structural mismatches are never repaired this way.
+
+If quotation validation still fails, the response retains the latest safe generated candidate as an explicitly non-final draft and reports each affected source paragraph, original quotation, corresponding rewrite text when found, issue type, difference summary, and corrective action. The interface shows these details with `Retry Rewrite`. It never substitutes an old review or rewrite result.
+
+## Public source retrieval safety
+
+Public URL retrieval is server-side and bounded to reduce SSRF and resource-exhaustion risk:
+
+- only HTTP or HTTPS URLs without embedded credentials are accepted;
+- localhost, local/internal hostnames, non-public IPv4 and IPv6 ranges, and any hostname resolving to a non-public address are rejected;
+- redirects are handled manually, limited, and DNS/public-address validation is repeated for every destination;
+- cookies and other credentials are omitted from fetches;
+- only HTML and plain-text media types are accepted;
+- time, redirect, declared-size, streamed-byte, and extracted-text limits are enforced.
+
+Retrieved pages remain untrusted input. The extractor removes common navigation, advertising, script, style, and related-content containers before creating the bounded source snapshot, but users must still verify the extracted facts.
 
 ## Local testing
 
@@ -179,14 +220,16 @@ Or run checks separately:
 
 The unit and component suites cover:
 
-- empty, whitespace-only, very short, at-limit, and over-limit drafts;
-- score bounds and strict review JSON;
+- text, public-URL, URL-only, image-caption/OCR, and output-language inputs;
+- empty, whitespace-only, at-limit, and over-limit inputs;
+- public-address URL validation, redirects, timeouts, content types, byte limits, and source extraction, including tests for private/reserved DNS answers;
+- six-category score bounds, strict review JSON, weighted-score recomputation, deterministic caps, findings, risks, and readiness bands;
 - passing and failing reviews making one Review Agent call each with no rewrite;
 - review score and feedback rendering without final output;
-- both post-review actions for every result;
+- explicit Rewrite Agent requests after both high and low scores;
 - separate, explicit, and repeated Rewrite Agent calls;
-- edit-without-AI behavior and sticky stale-review invalidation;
-- rewrite-error state preservation and duplicate-submit prevention;
+- source-change invalidation, immediate stale-output clearing, request sequencing, and duplicate-submit prevention;
+- rewrite-error handling without restoration of an older result;
 - threshold/decision normalization;
 - missing API configuration;
 - API authentication and rate-limit failures;
@@ -194,7 +237,9 @@ The unit and component suites cover:
 - malformed, empty, and truncated AI responses;
 - request content type, request JSON, and request-size limits;
 - news-editor prompt structure, factual fidelity, language/script preservation, press-release-artifact removal, and untrusted-data boundaries;
-- a 12-case bilingual evaluation set spanning English, Traditional Chinese, Simplified Chinese script preservation, mixed-language names, rough notes, promotional releases, quotations, dates, statistics, allegations, uncertainty, missing information, placeholders, contradictions, and prompt injection.
+- quotation classification, Unicode normalization, repeated/nested forms, modification, omission, splitting, merging, punctuation changes, one focused retry, and actionable retained-candidate errors;
+- a deterministic bilingual review set with strong and poor Traditional Chinese and English copy, missing facts, unsupported claims, Chinese quotation styles, and the supplied Oriental Daily URL;
+- a 12-case bilingual rewrite set spanning language/script preservation, mixed-language names, rough notes, promotional releases, quotations, dates, statistics, allegations, uncertainty, missing information, placeholders, contradictions, and prompt injection.
 
 ### Browser testing without a real API key
 
@@ -223,13 +268,23 @@ Useful mock inputs:
 
 The mock provider logs only the Review/Rewrite Agent call count, never draft content. Use browser responsive tools to check a desktop width around 1440 pixels and a mobile width around 390 pixels. Verify review-only rendering, both post-review actions, stale-review behavior, error retry, final-output gating, copy, repeated rewrite, and Start New Draft.
 
-### Optional live rewrite evaluation
+### Optional live model evaluations
 
-The deterministic test suite is the default quality gate. To evaluate the same made-up bilingual fixtures against the configured live model, start the application and run:
+The deterministic test suite is the default quality gate. Live evaluations require a running application, use the configured provider, may incur charges, and are not run by `npm test`.
+
+Run the repeatable Review Agent scoring set:
+
+    npm run eval:review:live
+
+`EVAL_RUNS` defaults to 2 runs per case. `EVAL_IDS` selects a comma-separated subset, `EVAL_MODEL` records the non-secret model identifier used for the run, `REVIEW_EVAL_BASE_URL` changes the application URL, and `REVIEW_EVAL_TIMEOUT_MS` changes the per-request timeout. The JSON-lines output records case IDs, parameters, sub-scores, weighted and final scores, caps, bands, latency, parsing or HTTP errors, run spread, and bilingual strong-versus-poor separation. It never prints drafts, retrieved source text, credentials, rationales, or finding evidence.
+
+Run the Rewrite Agent fidelity set:
 
     npm run eval:live
 
-Set `LIVE_EVAL_IDS` to a comma-separated subset for staged batches and `LIVE_EVAL_BASE_URL` when the site is not on `http://127.0.0.1:3000`. The harness counts every request and checks traceability, exact quotations, required terms, new numbers/placeholders, prohibited boilerplate, outlet attribution, markdown, and the headline/body format. It never prints credentials.
+Set `LIVE_EVAL_IDS` to a comma-separated subset and `LIVE_EVAL_BASE_URL` when the site is not on `http://127.0.0.1:3000`. The harness counts every request and checks traceability, exact quotations, required terms, new numbers or placeholders, prohibited boilerplate, outlet attribution, markdown, and the headline/body format. It never prints credentials.
+
+These commands provide a repeatable basis for before/after or Flash/Pro comparison. The earlier Flash baseline on 16 July 2026 used disabled thinking and a smaller output budget; it is historical evidence, not the current production configuration. Current runs record `deepseek-v4-pro`, enabled thinking, `reasoning_effort: max`, upstream streaming, and a 64,000-token completion budget. The rewrite harness exercises the production route and its bounded retry behavior. Provider outputs can still vary, so recorded results are not a permanent quality guarantee.
 
 ## Editorial research basis
 
@@ -243,9 +298,12 @@ The news-editor prompt uses only shared, high-level principles—accuracy, conci
 ## Input and data limits
 
 - Drafts are limited to 50,000 characters.
+- Public source URLs are limited to 2,048 characters and must resolve only to public internet addresses.
+- Up to eight image-context items are accepted by the API, with at most 4,000 characters of caption or OCR text per item. The current browser interface sends one combined visual-note item for the selected files.
+- Public page retrieval defaults to an 8-second timeout, three redirects, and 1.5 MB of response bytes before bounded text extraction.
 - API request bodies are limited to 220,000 bytes.
 - The application does not persist drafts, results, or user history.
-- Live drafts are sent to DeepSeek for processing and are therefore subject to DeepSeek account terms and data handling.
+- Submitted copy, retrieved text, and image captions or OCR are sent to DeepSeek for processing and are therefore subject to DeepSeek account terms and data handling. Image bytes are not sent.
 
 ## Troubleshooting
 
@@ -259,15 +317,23 @@ Check that the key is active and copied without surrounding quotation marks. The
 
 ### The request times out
 
-Retry with a shorter draft, check DeepSeek service availability, or increase DEEPSEEK_TIMEOUT_MS. A longer timeout may make the interface wait longer during provider congestion.
+Retry with a shorter draft or check DeepSeek service availability. Maximum-effort Pro requests stream upstream and may legitimately take several minutes; the default timeout is the provider's documented ten-minute queue window, and the interface shows live elapsed time while it waits.
 
 ### The model is rejected
 
-Use a currently available model such as deepseek-v4-flash or deepseek-v4-pro. Restart after changing DEEPSEEK_MODEL.
+Use a model identifier currently available to your DeepSeek account. The verified project default is `deepseek-v4-pro`. A rejected model now reports the workflow stage, provider, configured model, upstream HTTP status, and a sanitized cause without exposing credentials or provider reasoning.
 
 ### The Review Agent returns invalid JSON
 
 Retry the request. JSON Output is enabled, but the backend still validates every field and fails safely if output is malformed, empty, or truncated.
+
+### A source URL is rejected
+
+Only public HTTP or HTTPS article pages without embedded credentials are supported. Localhost, private/internal destinations, unsafe redirects, unsupported media types, oversized pages, and pages that exceed the retrieval timeout are rejected rather than fetched permissively. Paste the article text directly if a public site blocks bounded server-side retrieval.
+
+### Quotation preservation still fails after retry
+
+The backend has already used its single focused correction attempt. Review the displayed paragraph, original quotation, candidate quotation, difference, and suggested action. The retained candidate is diagnostic and is not marked final; use `Retry Rewrite` to start a new explicit request after checking the source quotation.
 
 ### A hydration warning mentions data-sharkid
 
@@ -284,6 +350,10 @@ Clipboard access can be restricted outside localhost or HTTPS. Select the final-
 
 Then open [http://localhost:3001](http://localhost:3001).
 
-## Remaining operational limitation
+## Remaining operational limitations
 
-A live DeepSeek success request requires a user-supplied API key and may incur provider charges. The project includes deterministic mocked tests so the workflow can be tested without a real credential.
+A live DeepSeek success request requires a user-supplied API key and may incur provider charges. Some public sites may block or render content in a way that prevents bounded server-side extraction.
+
+Hostname addresses are checked before each fetch and redirect, but native `fetch` performs its own subsequent DNS resolution; the validated address is not pinned to the connection. A hostile domain could therefore attempt DNS rebinding in that time-of-check/time-of-use window. Use a resolver-pinning egress proxy before treating public-URL retrieval as a hardened fetcher for fully adversarial URLs.
+
+DeepSeek V4 is text-only in this workflow. Selected image bytes remain in the browser; only user-supplied captions or OCR text are reviewed. Quotation classification, Chinese person-name extraction, and named-speaker proximity detection are deliberately conservative heuristics, and provider output remains probabilistic. Deterministic checks cover exact quotations, high-confidence named attribution beside them, extracted source-script names, figures, mixed-language terms, format, and output language, but a human editor must still verify full semantic fidelity, ambiguous or indirect attribution, units, and publication readiness.

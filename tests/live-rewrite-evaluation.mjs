@@ -37,7 +37,15 @@ for (const testCase of selectedCases) {
     const response = await fetch(`${baseUrl}/api/rewrite`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ draft: testCase.draft, review }),
+      body: JSON.stringify({
+        source: {
+          primaryText: testCase.draft,
+          userDraft: testCase.draft,
+          imageContext: [],
+        },
+        review,
+        outputLanguage: "original",
+      }),
       signal: AbortSignal.timeout(Number(process.env.LIVE_EVAL_TIMEOUT_MS || 120_000)),
     });
     const body = await response.json();
