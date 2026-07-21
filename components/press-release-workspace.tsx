@@ -9,7 +9,6 @@ import { ApiRequestError, requestReview, requestRewrite } from "@/lib/client/api
 import {
   MAX_DRAFT_CHARS,
   type EditorialInput,
-  type OutputLanguage,
   type QuotationIssue,
   type ReviewResult,
   type SourceSnapshot,
@@ -74,16 +73,12 @@ function inputSignature(input: EditorialInput) {
   return JSON.stringify({
     draft: input.draft,
     sourceUrl: input.sourceUrl,
-    imageContext: input.imageContext,
   });
 }
 
 export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspaceProps) {
   const [draft, setDraft] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
-  const [imageFiles, setImageFiles] = useState<string[]>([]);
-  const [imageNotes, setImageNotes] = useState("");
-  const [outputLanguage, setOutputLanguage] = useState<OutputLanguage>("original");
   const [reviewedInputSignature, setReviewedInputSignature] = useState("");
   const [reviewedSource, setReviewedSource] = useState<SourceSnapshot | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
@@ -120,16 +115,6 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     return {
       draft,
       sourceUrl,
-      imageContext: imageNotes.trim()
-        ? [
-            {
-              label: imageFiles.length ? imageFiles.join(", ") : "Supporting visual notes",
-              text: imageNotes.trim(),
-              source: "user_caption",
-            },
-          ]
-        : [],
-      outputLanguage,
     };
   }
 
@@ -169,14 +154,11 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   }
 
   function validateInput(input: EditorialInput) {
-    if (!input.draft.trim() && !input.sourceUrl.trim() && input.imageContext.length === 0) {
-      return "Enter draft text, a source URL, or supported image text before requesting a review.";
+    if (!input.draft.trim() && !input.sourceUrl.trim()) {
+      return "Enter draft text or a source URL before requesting a review.";
     }
     if (input.draft.length > MAX_DRAFT_CHARS) {
       return "Drafts are limited to 50,000 characters.";
-    }
-    if (imageFiles.length > 0 && !imageNotes.trim()) {
-      return "Add an accurate caption or OCR text for the selected image files.";
     }
     return "";
   }
@@ -246,7 +228,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     setProcessing("rewriting");
 
     try {
-      const result = await requestRewrite(reviewedSource, review, outputLanguage);
+      const result = await requestRewrite(reviewedSource, review);
       if (activeRequestRef.current !== requestId) return;
       setRewriteState({
         status: "success",
@@ -317,9 +299,6 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   function handleStartNew() {
     setDraft("");
     setSourceUrl("");
-    setImageFiles([]);
-    setImageNotes("");
-    setOutputLanguage("original");
     setInputError("");
     clearResults();
     focusInput();
@@ -344,7 +323,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
         <div className="section-heading">
           <div>
             <h2>Add the article or draft</h2>
-            <p>Paste text, add one public article URL, and include relevant image captions or OCR.</p>
+            <p>Paste text or add one public article URL.</p>
           </div>
           <span className="privacy-note">Sent to DeepSeek only when submitted</span>
         </div>
@@ -394,65 +373,10 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
               placeholder="https://example.com/article"
               disabled={busy}
             />
-            <p className="field-help">The server retrieves a bounded text snapshot and image captions.</p>
+            <p className="field-help">The server retrieves a bounded text snapshot.</p>
           </div>
 
-          <div>
-            <label className="input-label" htmlFor="output-language">
-              Output language
-            </label>
-            <select
-              id="output-language"
-              value={outputLanguage}
-              onChange={(event) => {
-                setOutputLanguage(event.target.value as OutputLanguage);
-                setRewriteState({ status: "idle" });
-                setCopied(false);
-                setRequestError(null);
-              }}
-              disabled={busy}
-            >
-              <option value="original">Keep original language</option>
-              <option value="traditional_chinese">Traditional Chinese (Hong Kong)</option>
-              <option value="english">English</option>
-            </select>
-          </div>
         </div>
-
-        <label className="input-label" htmlFor="image-files">
-          Supporting images (optional)
-        </label>
-        <input
-          id="image-files"
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          multiple
-          onChange={(event) => {
-            setImageFiles(Array.from(event.target.files ?? [], ({ name }) => name).slice(0, 8));
-            markSourceChanged();
-          }}
-          disabled={busy}
-        />
-        <p className="field-help">
-          DeepSeek V4 is text-only. Image bytes stay in this browser; add an accurate caption or OCR
-          transcript below so the agents receive the relevant visual content.
-        </p>
-
-        <label className="input-label" htmlFor="image-notes">
-          Image captions or OCR text
-        </label>
-        <textarea
-          id="image-notes"
-          className="context-textarea"
-          value={imageNotes}
-          onChange={(event) => {
-            setImageNotes(event.target.value);
-            markSourceChanged();
-          }}
-          placeholder="Describe only facts visibly supported by the image, or paste verified OCR text."
-          disabled={busy}
-          maxLength={4_000}
-        />
 
         <p id="draft-error" className="field-error-message" role={inputError ? "alert" : undefined}>
           {inputError}

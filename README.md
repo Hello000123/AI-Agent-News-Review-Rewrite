@@ -2,11 +2,11 @@
 
 PressReady is a focused local website for one workflow:
 
-    Text, public URL, and image text → Review Agent → Calibrated score and feedback → Explicit rewrite → Validated news report
+    Text or public URL → Review Agent → Calibrated score and feedback → Explicit rewrite → Validated news report
 
 The Review Agent scores the submitted copy once and returns a structured assessment. Rewriting never starts automatically and is never skipped because a review score is high: after either a high or low score, the user can explicitly request a Rewrite Agent call or return to the source input. The rewrite uses the immutable source snapshot that produced the displayed review.
 
-The project is intentionally limited to this workflow. It has no login, database, user history, news search, dark theme, publishing, distribution, or scheduled work. The output selector supports the source language, Traditional Chinese (Hong Kong), or English.
+The project is intentionally limited to this workflow. It has no login, database, user history, news search, dark theme, publishing, distribution, or scheduled work. Rewrites automatically preserve the primary input language and Chinese script: English input stays English, while Traditional or Simplified Chinese input stays in the detected Chinese script.
 
 ## Technology stack
 
@@ -118,7 +118,7 @@ Official references:
 
 Open [http://localhost:3000](http://localhost:3000).
 
-The browser sends submitted text, the public source URL, image captions or OCR text, and the output-language selection only to the local Next.js backend. Image bytes stay in the browser because DeepSeek V4 is text-only; only the user-provided visual description or OCR is sent. The backend retrieves public URL content and calls DeepSeek with the server-only secret key. The key is never included in browser source, browser requests, API error bodies, or application logs.
+The browser sends only the submitted text and public source URL to the local Next.js backend. The interface does not accept picture uploads or user-supplied image captions/OCR because DeepSeek V4 is text-only in this workflow. The backend retrieves public URL content, derives the rewrite language from the primary article, and calls DeepSeek with the server-only secret key. The key is never included in browser source, browser requests, API error bodies, or application logs.
 
 ## Production build
 
@@ -132,10 +132,10 @@ The production server also starts at [http://localhost:3000](http://localhost:30
 REVIEW_PASS_SCORE defaults to 80.
 
 - `/api/review` builds one immutable source snapshot and invokes only the Review Agent. It never starts a rewrite.
-- If text and a URL are both supplied, the submitted text is the copy being scored and the retrieved article is supporting reference material. For a URL-only request, the extracted article becomes the primary copy. Verified image captions or OCR can supplement either form and can be the primary source when no text or usable linked article is available.
+- If text and a URL are both supplied, the submitted text is the copy being scored and the retrieved article is supporting reference material. For a URL-only request, the extracted article becomes the primary copy.
 - Every valid result shows the final score, uncapped weighted score, any deterministic cap and reasons, readiness band, six category rationales, structured findings, strengths, missing information, and recommendations.
 - Both a passing/high score and a failing/low score expose `Rewrite with AI`. Clicking it makes a separate `/api/rewrite` request unless another request is already running or the reviewed source has since changed. A score never causes an automatic rewrite and never suppresses an explicit rewrite.
-- Editing text, the URL, or image text clears any displayed rewrite immediately and marks the existing review as stale; a new review is required before rewriting that changed source. Changing only the output-language selection clears the old rewrite and allows a fresh rewrite from the same reviewed source.
+- Editing the text or URL clears any displayed rewrite immediately and marks the existing review as stale; a new review is required before rewriting that changed source.
 - Starting a review or rewrite clears the prior output state. Request sequence IDs discard late responses, and rewrite failures never restore an older successful output.
 
 The Review Agent returns category scores and findings, but the backend computes the authoritative weighted and final scores, readiness band, and decision. The weighting is:
@@ -162,7 +162,7 @@ The Review Agent:
 
 - evaluates without rewriting;
 - scores the exact submitted copy across the six fixed categories and published readiness bands;
-- treats retrieved articles and image text as separately labelled evidence rather than transferring a publisher's reputation or reference prose quality to a user draft;
+- treats retrieved article and page context as separately labelled evidence rather than transferring a publisher's reputation or reference prose quality to a user draft;
 - applies equivalent standards across languages and ignores publisher reputation;
 - treats media contacts, boilerplates, executive quotations, formal datelines, and calls to action as optional unless essential to the specific announcement;
 - returns a required rationale for every category score, explicit readiness-risk flags, structured category/severity findings, strengths, missing information, and recommendations;
@@ -171,7 +171,7 @@ The Review Agent:
 
 The Rewrite Agent:
 
-- receives the immutable primary source, relevant retrieved link and image-text context, validated review feedback, and selected output language;
+- receives the immutable primary source, relevant retrieved page context, validated review feedback, and an automatically derived source-language requirement;
 - treats source material as factual input and review feedback only as editing guidance;
 - creates a concise factual headline, strong lead, inverted-pyramid structure, short paragraphs, and neutral newsroom language;
 - preserves material supported facts, exact direct quotations, names, dates, numbers, attribution, uncertainty, language, and script;
@@ -179,10 +179,10 @@ The Rewrite Agent:
 - removes promotional repetition and press-release artifacts without dropping material facts;
 - rejects an empty or malformed candidate, a wrong-language result, changed or untraceable source numbers, omitted or romanized mandatory source-script names, omitted mandatory mixed-language terms, invented direct speech, or an exact/whitespace-only/punctuation-only source copy;
 - checks high-confidence named-speaker attribution beside exact preserved quotations in English and Chinese, and routes a reassignment or lost attribution through the same single bounded source-fidelity correction;
-- treats exact Chinese/English powers-of-ten and small English number-word equivalents as the same figure during translation (for example, `5.8萬` and `58,000`) while retaining invented-number checks;
+- treats equivalent Chinese powers-of-ten and Arabic-number renderings as the same figure (for example, `5.8萬` and `58,000`) while retaining invented-number checks and the original language/script lock;
 - returns only a headline, one blank line, and the news-report body after validation.
 
-User drafts, retrieved source material, image text, and feedback are wrapped as JSON data in the prompts and explicitly treated as untrusted content. Generated output is rendered as plain textarea text; HTML is never injected.
+User drafts, retrieved source material, and feedback are wrapped as JSON data in the prompts and explicitly treated as untrusted content. Generated output is rendered as plain textarea text; HTML is never injected.
 
 ## Quotation preservation and retry behavior
 
@@ -220,7 +220,7 @@ Or run checks separately:
 
 The unit and component suites cover:
 
-- text, public-URL, URL-only, image-caption/OCR, and output-language inputs;
+- text, public-URL, URL-only, and automatic English/Chinese language inference;
 - empty, whitespace-only, at-limit, and over-limit inputs;
 - public-address URL validation, redirects, timeouts, content types, byte limits, and source extraction, including tests for private/reserved DNS answers;
 - six-category score bounds, strict review JSON, weighted-score recomputation, deterministic caps, findings, risks, and readiness bands;
@@ -299,11 +299,11 @@ The news-editor prompt uses only shared, high-level principles—accuracy, conci
 
 - Drafts are limited to 50,000 characters.
 - Public source URLs are limited to 2,048 characters and must resolve only to public internet addresses.
-- Up to eight image-context items are accepted by the API, with at most 4,000 characters of caption or OCR text per item. The current browser interface sends one combined visual-note item for the selected files.
+- Review requests accept a draft, a public source URL, or both; picture upload and user-supplied image-text fields are rejected.
 - Public page retrieval defaults to an 8-second timeout, three redirects, and 1.5 MB of response bytes before bounded text extraction.
 - API request bodies are limited to 220,000 bytes.
 - The application does not persist drafts, results, or user history.
-- Submitted copy, retrieved text, and image captions or OCR are sent to DeepSeek for processing and are therefore subject to DeepSeek account terms and data handling. Image bytes are not sent.
+- Submitted copy and retrieved text are sent to DeepSeek for processing and are therefore subject to DeepSeek account terms and data handling.
 
 ## Troubleshooting
 
@@ -356,4 +356,4 @@ A live DeepSeek success request requires a user-supplied API key and may incur p
 
 Hostname addresses are checked before each fetch and redirect, but native `fetch` performs its own subsequent DNS resolution; the validated address is not pinned to the connection. A hostile domain could therefore attempt DNS rebinding in that time-of-check/time-of-use window. Use a resolver-pinning egress proxy before treating public-URL retrieval as a hardened fetcher for fully adversarial URLs.
 
-DeepSeek V4 is text-only in this workflow. Selected image bytes remain in the browser; only user-supplied captions or OCR text are reviewed. Quotation classification, Chinese person-name extraction, and named-speaker proximity detection are deliberately conservative heuristics, and provider output remains probabilistic. Deterministic checks cover exact quotations, high-confidence named attribution beside them, extracted source-script names, figures, mixed-language terms, format, and output language, but a human editor must still verify full semantic fidelity, ambiguous or indirect attribution, units, and publication readiness.
+DeepSeek V4 is text-only in this workflow, so the application does not offer picture upload, visual analysis, or user-supplied image OCR/caption inputs. Quotation classification, Chinese person-name extraction, and named-speaker proximity detection are deliberately conservative heuristics, and provider output remains probabilistic. Deterministic checks cover exact quotations, high-confidence named attribution beside them, extracted source-script names, figures, mixed-language terms, format, and output language, but a human editor must still verify full semantic fidelity, ambiguous or indirect attribution, units, and publication readiness.

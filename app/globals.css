@@ -80,58 +80,6 @@ textarea:disabled {
   border: 0;
 }
 
-.site-header {
-  display: flex;
-  width: min(1120px, calc(100% - 40px));
-  min-height: 74px;
-  margin: 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid rgba(199, 210, 223, 0.72);
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 11px;
-  color: var(--ink-strong);
-  font-size: 18px;
-  font-weight: 760;
-  letter-spacing: -0.02em;
-  text-decoration: none;
-}
-
-.brand-mark {
-  display: grid;
-  width: 37px;
-  height: 37px;
-  place-items: center;
-  border-radius: 10px 10px 10px 3px;
-  background: var(--ink-strong);
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-
-.header-note {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border: 1px solid #cfe8de;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #0c644e;
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.header-note span {
-  color: #19a477;
-  font-size: 11px;
-}
-
 .page-shell {
   width: min(960px, calc(100% - 40px));
   margin: 0 auto;
@@ -324,7 +272,6 @@ textarea:disabled {
 }
 
 .draft-textarea,
-.context-textarea,
 .output-textarea {
   display: block;
   width: 100%;
@@ -344,21 +291,13 @@ textarea:disabled {
   padding: 18px 19px;
 }
 
-.context-textarea {
-  min-height: 112px;
-  padding: 13px 15px;
-}
-
 .source-options-grid {
   display: grid;
   margin: 24px 0;
-  grid-template-columns: minmax(0, 1.6fr) minmax(210px, 0.8fr);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.source-options-grid input,
-.source-options-grid select,
-input[type="file"] {
+.source-options-grid input {
   display: block;
   width: 100%;
   min-height: 46px;
@@ -367,10 +306,6 @@ input[type="file"] {
   border-radius: 11px;
   background: #ffffff;
   color: var(--ink-strong);
-}
-
-input[type="file"] {
-  padding: 8px 10px;
 }
 
 .field-help {
@@ -1091,18 +1026,8 @@ footer p {
 }
 
 @media (max-width: 620px) {
-  .site-header,
   .page-shell {
     width: min(100% - 28px, 960px);
-  }
-
-  .site-header {
-    min-height: 66px;
-  }
-
-  .header-note {
-    padding: 5px 9px;
-    font-size: 11px;
   }
 
   .hero {
@@ -1156,11 +1081,6 @@ footer p {
 
   .draft-textarea {
     min-height: 260px;
-  }
-
-  .source-options-grid {
-    grid-template-columns: 1fr;
-    gap: 4px;
   }
 
   .input-meta,

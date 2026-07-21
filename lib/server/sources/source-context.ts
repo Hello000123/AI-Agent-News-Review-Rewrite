@@ -1,15 +1,9 @@
 import { lookup as nodeLookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-export interface UserProvidedImageText {
-  readonly caption?: string;
-  readonly ocrText?: string;
-}
-
 export interface BuildSourceContextInput {
   readonly draftText?: string;
   readonly sourceUrl?: string;
-  readonly imageInputs?: readonly UserProvidedImageText[];
 }
 
 export interface SourceContextSnapshot {
@@ -160,7 +154,6 @@ export async function buildSourceContext(
 ): Promise<SourceContextSnapshot> {
   const limits = resolveLimits(dependencies.limits);
   const draftText = normalizeAndCap(input.draftText ?? "", limits.maxDraftChars);
-  const userImageContext = formatUserImageContext(input.imageInputs ?? []);
 
   let url = "";
   let title = "";
@@ -185,10 +178,7 @@ export async function buildSourceContext(
     }
   }
 
-  const imageContext = normalizeAndCap(
-    [sourceImageContext, userImageContext].filter(Boolean).join("\n"),
-    limits.maxImageContextChars,
-  );
+  const imageContext = normalizeAndCap(sourceImageContext, limits.maxImageContextChars);
   const combinedFactualText = buildCombinedText(
     { draftText, url, title, articleText, imageContext },
     limits.maxCombinedChars,
@@ -766,17 +756,6 @@ function collectSourceImageContext(root: ElementNode): string[] {
     return true;
   });
   return dedupe(items);
-}
-
-function formatUserImageContext(images: readonly UserProvidedImageText[]): string {
-  const lines: string[] = [];
-  images.forEach((image, index) => {
-    const caption = normalizeText(image.caption ?? "");
-    const ocrText = normalizeText(image.ocrText ?? "");
-    if (caption) lines.push(`User image ${index + 1} caption: ${caption}`);
-    if (ocrText) lines.push(`User image ${index + 1} OCR: ${ocrText}`);
-  });
-  return dedupe(lines).join("\n");
 }
 
 function renderedText(node: HtmlNode): string {

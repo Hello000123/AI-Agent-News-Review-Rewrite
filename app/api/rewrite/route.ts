@@ -11,7 +11,6 @@ export async function POST(request: Request) {
     const result: RewriteApiResponse = await rewriteWithFeedback(
       input.source,
       input.review,
-      input.outputLanguage,
     );
     return jsonResponse(result);
   } catch (error) {

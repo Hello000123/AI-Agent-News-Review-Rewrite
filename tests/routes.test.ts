@@ -23,7 +23,7 @@ const rewriteSource: SourceSnapshot = {
   linkedTitle: "Supporting reference",
   linkedText: "The source supports the confirmed update.",
   imageContext: [
-    { label: "User caption", text: "Officials at the briefing.", source: "user_caption" },
+    { label: "Page caption", text: "Officials at the briefing.", source: "link_caption" },
   ],
 };
 
@@ -49,24 +49,24 @@ function completionResponse(content: string) {
   );
 }
 
-function providerCall(fetchMock: ReturnType<typeof vi.fn>) {
-  const call = fetchMock.mock.calls.find(([url]) =>
+function providerCall(fetchMock: ReturnType<typeof vi.fn>, callIndex = 0) {
+  const call = fetchMock.mock.calls.filter(([url]) =>
     String(url).includes("/chat/completions"),
-  );
+  )[callIndex];
   if (!call) throw new Error("Expected a DeepSeek provider call.");
   return call as unknown as [string, RequestInit];
 }
 
-function providerRequestBody(fetchMock: ReturnType<typeof vi.fn>) {
-  const [, init] = providerCall(fetchMock);
+function providerRequestBody(fetchMock: ReturnType<typeof vi.fn>, callIndex = 0) {
+  const [, init] = providerCall(fetchMock, callIndex);
   return JSON.parse(String(init.body)) as {
     response_format?: unknown;
     messages: Array<{ role: string; content: string }>;
   };
 }
 
-function providerUserPrompt(fetchMock: ReturnType<typeof vi.fn>) {
-  const body = providerRequestBody(fetchMock);
+function providerUserPrompt(fetchMock: ReturnType<typeof vi.fn>, callIndex = 0) {
+  const body = providerRequestBody(fetchMock, callIndex);
   return body.messages.find(({ role }) => role === "user")?.content ?? "";
 }
 
@@ -140,11 +140,6 @@ describe("review and rewrite API routes", () => {
     const editorialInput = {
       draft: "The submitted draft says the pilot is complete.",
       sourceUrl: PUBLIC_SOURCE_URL,
-      imageContext: [
-        { label: "User image caption", text: "A briefing was held.", source: "user_caption" },
-        { label: "User image OCR", text: "Pilot complete", source: "ocr_text" },
-      ],
-      outputLanguage: "traditional_chinese",
     } as const;
     const response = await reviewRoute(
       request("/api/review", JSON.stringify(editorialInput)),
@@ -166,14 +161,12 @@ describe("review and rewrite API routes", () => {
       linkedText: expect.stringContaining("retrieved reference confirms the pilot"),
     });
     expect(body.source.imageContext).toEqual(
-      expect.arrayContaining([
-        editorialInput.imageContext[0],
-        editorialInput.imageContext[1],
+      [
         expect.objectContaining({
           source: "link_caption",
           text: expect.stringContaining("Officials presenting the pilot"),
         }),
-      ]),
+      ],
     );
 
     const providerBody = providerRequestBody(fetchMock);
@@ -183,10 +176,10 @@ describe("review and rewrite API routes", () => {
     expect(userPrompt).toContain(PUBLIC_SOURCE_URL);
     expect(userPrompt).toContain("Reference headline");
     expect(userPrompt).toContain("retrieved reference confirms the pilot");
-    expect(userPrompt).toContain("A briefing was held.");
+    expect(userPrompt).toContain("Officials at the briefing.");
   });
 
-  it("uses source and outputLanguage and rewrites even when the review score is high", async () => {
+  it("derives the source language and rewrites even when the review score is high", async () => {
     vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
     const finalText =
       "Supported update confirmed\n\nOfficials confirmed the supported update in a clearer report.";
@@ -199,7 +192,6 @@ describe("review and rewrite API routes", () => {
         JSON.stringify({
           source: rewriteSource,
           review: highReview,
-          outputLanguage: "english",
         }),
       ),
     );
@@ -221,6 +213,7 @@ describe("review and rewrite API routes", () => {
   it.each([
     {
       language: "English",
+      expectedLanguageLock: "English",
       draft:
         "The city library opened a new reading room on Thursday. The library said the space will host free community workshops.",
       rewritten:
@@ -228,11 +221,16 @@ describe("review and rewrite API routes", () => {
     },
     {
       language: "Traditional Chinese",
+      expectedLanguageLock: "Chinese",
       draft: "市立圖書館周四啟用新的閱讀室。館方表示，該空間將舉辦免費社區工作坊。",
       rewritten:
         "市立圖書館啟用社區閱讀室\n\n市立圖書館周四啟用新的閱讀室，館方表示該空間將舉辦免費社區工作坊。",
     },
-  ])("completes the $language Review and Rewrite chain", async ({ draft, rewritten }) => {
+  ])("completes the $language Review and Rewrite chain", async ({
+    expectedLanguageLock,
+    draft,
+    rewritten,
+  }) => {
     vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
     const fetchMock = vi
       .fn()
@@ -241,7 +239,7 @@ describe("review and rewrite API routes", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const reviewResponse = await reviewRoute(
-      request("/api/review", JSON.stringify({ draft, outputLanguage: "original" })),
+      request("/api/review", JSON.stringify({ draft })),
     );
     expect(reviewResponse.status).toBe(200);
     const reviewed = (await reviewResponse.json()) as {
@@ -255,7 +253,6 @@ describe("review and rewrite API routes", () => {
         JSON.stringify({
           source: reviewed.source,
           review: reviewed.review,
-          outputLanguage: "original",
         }),
       ),
     );
@@ -263,6 +260,7 @@ describe("review and rewrite API routes", () => {
     const rewrittenBody = (await rewriteResponse.json()) as { finalText: string };
     expect(rewrittenBody.finalText).toBe(rewritten);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(providerUserPrompt(fetchMock, 1)).toContain(`LANGUAGE LOCK: ${expectedLanguageLock}`);
     expect(JSON.stringify(reviewed)).not.toContain("PRIVATE_REASONING_MARKER");
     expect(JSON.stringify(rewrittenBody)).not.toContain("PRIVATE_REASONING_MARKER");
   });
@@ -338,8 +336,46 @@ describe("review and rewrite API routes", () => {
         JSON.stringify({
           draft: "   ",
           sourceUrl: "",
-          imageContext: [],
-          outputLanguage: "original",
+        }),
+      ),
+    );
+    expect(response.status).toBe(400);
+    expect(await responseErrorCode(response)).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects the removed output-language request field", async () => {
+    const reviewResponse = await reviewRoute(
+      request(
+        "/api/review",
+        JSON.stringify({ draft: "Complete submitted copy.", outputLanguage: "english" }),
+      ),
+    );
+    expect(reviewResponse.status).toBe(400);
+    expect(await responseErrorCode(reviewResponse)).toBe("VALIDATION_ERROR");
+
+    const rewriteResponse = await rewriteRoute(
+      request(
+        "/api/rewrite",
+        JSON.stringify({ source: rewriteSource, review: highReview, outputLanguage: "english" }),
+      ),
+    );
+    expect(rewriteResponse.status).toBe(400);
+    expect(await responseErrorCode(rewriteResponse)).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects the removed picture-input field", async () => {
+    const response = await reviewRoute(
+      request(
+        "/api/review",
+        JSON.stringify({
+          draft: "Complete submitted copy.",
+          imageContext: [
+            {
+              label: "Legacy page caption",
+              text: "Legacy image text",
+              source: "link_caption",
+            },
+          ],
         }),
       ),
     );

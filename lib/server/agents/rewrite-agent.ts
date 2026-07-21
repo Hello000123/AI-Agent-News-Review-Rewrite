@@ -5,13 +5,13 @@ import {
   createRewriteUserPrompt,
   createUnchangedRewriteCorrectionPrompt,
   CONSERVATIVE_REWRITE_CORRECTION_SYSTEM_PROMPT,
+  determineRequiredOutputLanguage,
   extractComparableNumericValues,
   extractVerbatimSourceScriptNames,
   FORMAT_CORRECTION_SYSTEM_PROMPT,
   extractVerbatimMixedLanguageTerms,
   preservesRequiredOutputLanguage,
   QUOTATION_CORRECTION_SYSTEM_PROMPT,
-  resolveRequiredOutputLanguage,
   REWRITE_SYSTEM_PROMPT,
   SOURCE_FIDELITY_CORRECTION_SYSTEM_PROMPT,
 } from "@/lib/server/agents/prompts";
@@ -25,7 +25,6 @@ import {
   MAX_REFERENCE_CHARS,
   quotationIssueSchema,
   rewriteApiResponseSchema,
-  type OutputLanguage,
   type QuotationIssue,
   type ReviewResult,
   type RewriteApiResponse,
@@ -162,7 +161,6 @@ function extractEnglishSmallNumberValues(text: string) {
 function validateSafeCandidate(
   candidate: string,
   source: SourceSnapshot,
-  outputLanguage: OutputLanguage,
 ) {
   if (!candidate) {
     throw new AppError(
@@ -194,10 +192,10 @@ function validateSafeCandidate(
     );
   }
 
-  if (!preservesRequiredOutputLanguage(source.primaryText, candidate, outputLanguage)) {
+  if (!preservesRequiredOutputLanguage(source.primaryText, candidate)) {
     throw new AppError(
       "REWRITE_LANGUAGE_MISMATCH",
-      `The Rewrite Agent did not use the selected output language (${resolveRequiredOutputLanguage(source.primaryText, outputLanguage)}). Please retry.`,
+      `The Rewrite Agent did not preserve the source language (${determineRequiredOutputLanguage(source.primaryText)}). Please retry.`,
       422,
       { publicDetails: { retryable: true } },
     );
@@ -231,7 +229,7 @@ function validateSafeCandidate(
   const requiredNumericValues = extractComparableNumericValues(source.primaryText);
   const outputNumericValues = new Set([
     ...extractComparableNumericValues(candidate),
-    ...(resolveRequiredOutputLanguage(source.primaryText, outputLanguage) === "English"
+    ...(determineRequiredOutputLanguage(source.primaryText) === "English"
       ? extractEnglishSmallNumberValues(candidate)
       : []),
   ]);
@@ -532,17 +530,16 @@ async function generateCandidate(
 export async function runRewriteAgent(
   source: SourceSnapshot,
   review: ReviewResult,
-  outputLanguage: OutputLanguage = "original",
   completionRunner: CompletionRunner = requestDeepSeekCompletion,
 ): Promise<RewriteApiResponse> {
   const firstCandidate = await generateCandidate(
-    createRewriteUserPrompt(source, review, outputLanguage),
+    createRewriteUserPrompt(source, review),
     completionRunner,
   );
 
   let firstSafetyError: AppError | null = null;
   try {
-    validateSafeCandidate(firstCandidate, source, outputLanguage);
+    validateSafeCandidate(firstCandidate, source);
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
     firstSafetyError = error;
@@ -583,20 +580,17 @@ export async function runRewriteAgent(
         { code: firstSafetyError.code, message: firstSafetyError.message },
         source,
         review,
-        outputLanguage,
       )
     : firstIsUnchanged
       ? createUnchangedRewriteCorrectionPrompt(
           firstCandidate,
           source,
           review,
-          outputLanguage,
         )
       : createQuotationCorrectionPrompt(
           firstCandidate,
           firstIssues,
           source,
-          outputLanguage,
         );
 
   let secondCandidate = "";
@@ -629,7 +623,7 @@ export async function runRewriteAgent(
         : 0.1,
     );
     secondCandidate = restoreHeadlineAfterFocusedCorrection(secondCandidate, firstCandidate);
-    validateSafeCandidate(secondCandidate, source, outputLanguage);
+    validateSafeCandidate(secondCandidate, source);
   } catch (error) {
     // A quotation-failed first draft is safe to retain for diagnosis when the
     // focused correction itself is unusable. Never fall back to an older UI result.
@@ -664,7 +658,7 @@ export async function runRewriteAgent(
       secondQuotationValidation,
     );
     if (punctuationRepairedCandidate) {
-      validateSafeCandidate(punctuationRepairedCandidate, source, outputLanguage);
+      validateSafeCandidate(punctuationRepairedCandidate, source);
       if (
         canonicalArticle(punctuationRepairedCandidate) ===
         canonicalArticle(source.primaryText)

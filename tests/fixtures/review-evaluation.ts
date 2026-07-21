@@ -112,8 +112,8 @@ const highQualityExpectations = {
   requiredRisks: noReadinessRisks,
 } as const satisfies ReviewEvaluationExpectations;
 
-function textRequest(draft: string, outputLanguage: EditorialInput["outputLanguage"]): EditorialInput {
-  return { draft, sourceUrl: "", imageContext: [], outputLanguage };
+function textRequest(draft: string): EditorialInput {
+  return { draft, sourceUrl: "" };
 }
 
 const traditionalPoorDraft =
@@ -131,8 +131,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     request: {
       draft: "",
       sourceUrl: ORIENTAL_DSE_ARTICLE_URL,
-      imageContext: [],
-      outputLanguage: "traditional_chinese",
     },
     expected: strongLimitedEditingExpectations,
   },
@@ -148,7 +146,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
         "署方表示，新安排涵蓋81K、87D及299X線，平日早上7時至9時的班次將由每12至15分鐘一班，縮短至每8至10分鐘一班。調整是根據今年首六個月的乘客量及候車時間數據制定。",
         "運輸署發言人說：「署方會在措施實施後四星期檢視乘客量及實際候車時間，再決定是否需要進一步調整。」三間巴士公司已確認車輛及車長安排，不會因加班而削減其他路線的既定班次。",
       ].join("\n\n"),
-      "traditional_chinese",
     ),
     expected: highQualityExpectations,
   },
@@ -157,7 +154,7 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     language: "traditional_chinese",
     inputKind: "text",
     tags: ["traditional_chinese", "poor_draft", "disorganised", "poor_language"],
-    request: textRequest(traditionalPoorDraft, "traditional_chinese"),
+    request: textRequest(traditionalPoorDraft),
     expected: {
       readinessBand: "WEAK",
       overallScoreRange: [40, 59],
@@ -181,8 +178,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     request: {
       draft: publisherReferencePoorDraft,
       sourceUrl: ORIENTAL_DSE_ARTICLE_URL,
-      imageContext: [],
-      outputLanguage: "traditional_chinese",
     },
     expected: {
       readinessBand: "SEVERELY_DEFICIENT",
@@ -210,7 +205,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
         "Construction is scheduled to begin on 3 August and finish by 30 November. The council said the contract covers new pumps, enlarged drains and water-level sensors, and will be funded from its existing resilience budget.",
         "Council engineer Maya Chen said, “The work targets the four locations with the longest recorded road closures last winter.” The transport department will publish temporary traffic arrangements at least seven days before work begins at each site.",
       ].join("\n\n"),
-      "english",
     ),
     expected: publicationReadyExpectations,
   },
@@ -221,7 +215,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     tags: ["english", "poor_draft", "disorganised", "poor_language"],
     request: textRequest(
       "City Transit approved a fare increase on 14 July 2026. Adult fares go from $2.40 to $2.60 on 1 September, while student fares stay $1.20. This draft is messy, say the price later maybe, but anyway fuel and staff costs rose 8% last year. The company said no routes will be cut. Put that good bit first? Then repeat: fares become $2.60 on 1 September. The transport regulator approved the change after a public consultation.",
-      "english",
     ),
     expected: {
       readinessBand: "WEAK",
@@ -240,7 +233,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     tags: ["english", "missing_facts", "incomplete", "named_source"],
     request: textRequest(
       "Riverton Council said on 14 July 2026 that it will open a learning centre offering evening technology courses. The announcement did not identify the centre's location, opening date, capacity, fees or course operator.",
-      "english",
     ),
     expected: {
       readinessBand: "WEAK",
@@ -260,7 +252,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     tags: ["english", "unsupported_claims", "statistics", "promotional_language"],
     request: textRequest(
       "Harbour Analytics launched a traffic platform on Tuesday. The company said the platform will eliminate congestion across the city within six months, cut every commuter's journey by exactly 37% and is the safest transport system ever developed. The article provides no study, trial results, methodology, independent source or qualification for those claims.",
-      "english",
     ),
     expected: {
       readinessBand: "WEAK",
@@ -282,7 +273,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     tags: ["english", "severely_deficient", "unsupported_claims", "contradictory"],
     request: textRequest(
       "Amazing transport thing fixed every road problem. It launched recently—or maybe it has not launched yet; confirm later. Everyone approves and there have been zero accidents. Add the operator, product, city, date, evidence and sources.",
-      "english",
     ),
     expected: {
       readinessBand: "SEVERELY_DEFICIENT",
@@ -317,7 +307,6 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
         "護士代表黃嘉敏說：“新增更次已完成編排，員工可按既定安排輪值。”病人組織召集人周樂怡表示：‘我們會收集使用者對預約流程的意見。’",
         "署方表示，試行期結束後會公布使用率、輪候時間及人手數據，再決定是否延續安排。",
       ].join("\n\n"),
-      "traditional_chinese",
     ),
     expected: {
       ...highQualityExpectations,

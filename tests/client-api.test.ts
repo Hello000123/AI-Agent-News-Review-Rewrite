@@ -22,11 +22,9 @@ describe("client API response validation", () => {
         requestReview({
           draft: source.primaryText,
           sourceUrl: "",
-          imageContext: [],
-          outputLanguage: "original",
         }),
     ],
-    ["rewrite", () => requestRewrite(source, highReview, "english")],
+    ["rewrite", () => requestRewrite(source, highReview)],
   ])("rejects a malformed successful %s response", async (_label, request) => {
     vi.stubGlobal(
       "fetch",
@@ -75,8 +73,6 @@ describe("client API response validation", () => {
       await requestReview({
         draft: source.primaryText,
         sourceUrl: "",
-        imageContext: [],
-        outputLanguage: "original",
       });
     } catch (error) {
       failure = error as ApiRequestError;
@@ -119,8 +115,6 @@ describe("client API response validation", () => {
       await requestReview({
         draft: source.primaryText,
         sourceUrl: "",
-        imageContext: [],
-        outputLanguage: "original",
       });
     } catch (error) {
       failure = error as ApiRequestError;

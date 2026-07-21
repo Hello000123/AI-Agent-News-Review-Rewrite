@@ -23,7 +23,7 @@ function response(body: BodyInit | null, init: ResponseInit = {}): Response {
 describe("source context", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("extracts an immutable Oriental-style article and keeps useful image and draft text", async () => {
+  it("extracts an immutable Oriental-style article and keeps useful page-caption and draft text", async () => {
     const html = `
       <!doctype html>
       <html lang="zh-Hant">
@@ -58,9 +58,6 @@ describe("source context", () => {
     const input = {
       draftText: "  初稿指出本屆共有24名狀元。  ",
       sourceUrl: `${ORIENTAL_URL}#comments`,
-      imageInputs: [
-        { caption: "用戶上載的成績單", ocrText: "狀元人數：24" },
-      ],
     } as const;
 
     const snapshot = await buildSourceContext(input, {
@@ -80,8 +77,6 @@ describe("source context", () => {
     expect(snapshot.articleText).not.toMatch(/主頁|廣告產品|更多新聞|版權|secretArticle/);
     expect(snapshot.imageContext).toContain("Source image description: 考生在校內與老師合照");
     expect(snapshot.imageContext).toContain("Source image caption: 應屆考生分享放榜感受。");
-    expect(snapshot.imageContext).toContain("User image 1 caption: 用戶上載的成績單");
-    expect(snapshot.imageContext).toContain("User image 1 OCR: 狀元人數：24");
     expect(snapshot.imageContext).not.toContain("logo");
     expect(snapshot.combinedFactualText).toContain("[Submitted draft — verify its claims]");
     expect(snapshot.combinedFactualText).toContain("[Retrieved source article]");
@@ -128,7 +123,7 @@ describe("source context", () => {
     expect(context.articleText).not.toContain("Article link");
   });
 
-  it("supports text-only pages and local draft/image-only snapshots", async () => {
+  it("supports text-only pages and local draft-only snapshots", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response("  First fact.\r\n\r\nSecond fact.  ", {
         headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -142,12 +137,11 @@ describe("source context", () => {
 
     const noFetch = vi.fn();
     const local = await buildSourceContext(
-      { draftText: "Local draft", imageInputs: [{ ocrText: "Image fact" }] },
+      { draftText: "Local draft" },
       { fetchImpl: noFetch as unknown as typeof fetch, dnsLookup: publicDns },
     );
     expect(local).toMatchObject({ url: "", title: "", articleText: "" });
     expect(local.combinedFactualText).toContain("Local draft");
-    expect(local.combinedFactualText).toContain("Image fact");
     expect(noFetch).not.toHaveBeenCalled();
   });
 

@@ -10,11 +10,9 @@ import {
 import {
   editorialInputSchema,
   MAX_DRAFT_CHARS,
-  MAX_IMAGE_CONTEXT_ITEMS,
   MAX_REFERENCE_CHARS,
   sourceSnapshotSchema,
   type EditorialInput,
-  type OutputLanguage,
   type ReviewApiResponse,
   type ReviewResult,
   type SourceSnapshot,
@@ -48,27 +46,16 @@ function mapSourceError(error: SourceContextError) {
 }
 
 function withLinkImageContext(
-  inputItems: EditorialInput["imageContext"],
   linkedImageText: string,
 ) {
-  const items = inputItems.map((item) => ({ ...item }));
-  if (!linkedImageText.trim()) return items;
+  if (!linkedImageText.trim()) return [];
 
   const sourceItem = {
     label: "Retrieved source-page image context",
     text: linkedImageText.trim().slice(0, 4_000),
     source: "link_caption" as const,
   };
-  if (items.length < MAX_IMAGE_CONTEXT_ITEMS) return [...items, sourceItem];
-
-  const last = items.at(-1);
-  if (!last) return [sourceItem];
-  items[items.length - 1] = {
-    ...last,
-    label: `${last.label} + source-page captions`.slice(0, 200),
-    text: `${last.text}\n\n[Source-page captions]\n${sourceItem.text}`.slice(0, 4_000),
-  };
-  return items;
+  return [sourceItem];
 }
 
 export async function prepareSourceSnapshot(
@@ -108,7 +95,7 @@ export async function prepareSourceSnapshot(
     }
   }
 
-  const imageContext = withLinkImageContext(input.imageContext, linked.imageContext);
+  const imageContext = withLinkImageContext(linked.imageContext);
   const imagePrimaryText = imageContext
     .map(({ label, text }) => `[${label}]\n${text}`)
     .join("\n\n");
@@ -119,7 +106,7 @@ export async function prepareSourceSnapshot(
   if (!primaryText) {
     throw new AppError(
       "EMPTY_SOURCE_CONTENT",
-      "The source did not contain usable article text. Paste the article or add verified image text and try again.",
+      "The source did not contain usable article text. Paste the article and try again.",
       422,
       { publicDetails: { retryable: false } },
     );
@@ -144,8 +131,6 @@ export async function reviewDraft(
       ? editorialInputSchema.parse({
           draft: input,
           sourceUrl: "",
-          imageContext: [],
-          outputLanguage: "original",
         })
       : editorialInputSchema.parse(input);
   const passScore = dependencies.passScore ?? getServerConfig().passScore;
@@ -169,8 +154,7 @@ export async function reviewDraft(
 export async function rewriteWithFeedback(
   source: SourceSnapshot,
   review: ReviewResult,
-  outputLanguage: OutputLanguage = "original",
   completionRunner?: CompletionRunner,
 ) {
-  return runRewriteAgent(source, review, outputLanguage, completionRunner);
+  return runRewriteAgent(source, review, completionRunner);
 }

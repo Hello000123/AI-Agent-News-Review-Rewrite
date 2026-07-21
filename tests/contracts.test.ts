@@ -28,19 +28,17 @@ const source: SourceSnapshot = {
   linkedTitle: "Reference article",
   linkedText: "Retrieved reference facts.",
   imageContext: [
-    { label: "Chart caption", text: "The chart covers 2026.", source: "user_caption" },
+    { label: "Page caption", text: "The source page caption covers 2026.", source: "link_caption" },
   ],
 };
 
 describe("editorial input and review contracts", () => {
-  it("requires at least one draft, public source URL, or image-text item", () => {
+  it("requires at least one draft or public source URL", () => {
     expect(editorialInputSchema.safeParse({}).success).toBe(false);
     expect(
       editorialInputSchema.safeParse({
         draft: "   ",
         sourceUrl: "   ",
-        imageContext: [],
-        outputLanguage: "original",
       }).success,
     ).toBe(false);
 
@@ -50,9 +48,12 @@ describe("editorial input and review contracts", () => {
     ).toBe(true);
     expect(
       editorialInputSchema.safeParse({
-        imageContext: [{ label: "OCR", text: "Image fact", source: "ocr_text" }],
+        draft: "News soon.",
+        imageContext: [
+          { label: "Legacy page caption", text: "Legacy image text", source: "link_caption" },
+        ],
       }).success,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("accepts the full editorial input and rejects unsafe URLs or extra fields", () => {
@@ -60,13 +61,14 @@ describe("editorial input and review contracts", () => {
       editorialInputSchema.safeParse({
         draft: "Submitted copy.",
         sourceUrl: "https://news.example/article",
-        imageContext: [
-          { label: "User caption", text: "People outside the venue.", source: "user_caption" },
-          { label: "Image OCR", text: "Opening: 16 July", source: "ocr_text" },
-        ],
-        outputLanguage: "traditional_chinese",
       }).success,
     ).toBe(true);
+    expect(
+      editorialInputSchema.safeParse({
+        draft: "Submitted copy.",
+        outputLanguage: "english",
+      }).success,
+    ).toBe(false);
     expect(editorialInputSchema.safeParse({ sourceUrl: "file:///etc/passwd" }).success).toBe(false);
     expect(editorialInputSchema.safeParse({ draft: "News.", legacy: true }).success).toBe(false);
   });
@@ -144,14 +146,20 @@ describe("editorial input and review contracts", () => {
     ).toBe(false);
   });
 
-  it("uses source, calibrated review, and selected language as the rewrite contract", () => {
+  it("uses source and calibrated review as the automatic-language rewrite contract", () => {
+    expect(
+      rewriteRequestSchema.safeParse({
+        source,
+        review: highReview,
+      }).success,
+    ).toBe(true);
     expect(
       rewriteRequestSchema.safeParse({
         source,
         review: highReview,
         outputLanguage: "english",
       }).success,
-    ).toBe(true);
+    ).toBe(false);
     expect(
       rewriteRequestSchema.safeParse({
         draft: "Legacy draft-only input.",
@@ -162,7 +170,6 @@ describe("editorial input and review contracts", () => {
       rewriteRequestSchema.safeParse({
         source,
         review: { ...highReview, overallScore: 101 },
-        outputLanguage: "english",
       }).success,
     ).toBe(false);
   });

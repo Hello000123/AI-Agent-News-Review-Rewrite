@@ -37,9 +37,6 @@ export const readinessBandSchema = z.enum([
 ]);
 export type ReadinessBand = z.infer<typeof readinessBandSchema>;
 
-export const outputLanguageSchema = z.enum(["original", "traditional_chinese", "english"]);
-export type OutputLanguage = z.infer<typeof outputLanguageSchema>;
-
 const scoreSchema = z.number().finite().min(0).max(100);
 const feedbackItemSchema = z.string().trim().min(1).max(800);
 const sourceTextSchema = z.string().max(MAX_REFERENCE_CHARS);
@@ -147,7 +144,7 @@ export const imageContextItemSchema = z
   .object({
     label: z.string().trim().min(1).max(200),
     text: z.string().trim().min(1).max(4_000),
-    source: z.enum(["user_caption", "ocr_text", "link_caption"]),
+    source: z.literal("link_caption"),
   })
   .strict();
 
@@ -155,14 +152,11 @@ export const editorialInputSchema = z
   .object({
     draft: draftTextSchema.default(""),
     sourceUrl: sourceUrlSchema.default(""),
-    imageContext: z.array(imageContextItemSchema).max(MAX_IMAGE_CONTEXT_ITEMS).default([]),
-    outputLanguage: outputLanguageSchema.default("original"),
   })
   .strict()
   .refine(
-    ({ draft, sourceUrl, imageContext }) =>
-      Boolean(draft.trim() || sourceUrl.trim() || imageContext.length),
-    "Enter draft text, a source URL, or supported image text before requesting a review.",
+    ({ draft, sourceUrl }) => Boolean(draft.trim() || sourceUrl.trim()),
+    "Enter draft text or a source URL before requesting a review.",
   );
 
 export const sourceSnapshotSchema = z
@@ -181,7 +175,6 @@ export const rewriteRequestSchema = z
   .object({
     source: sourceSnapshotSchema,
     review: reviewResultSchema,
-    outputLanguage: outputLanguageSchema,
   })
   .strict();
 

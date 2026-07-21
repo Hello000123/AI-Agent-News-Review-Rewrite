@@ -44,7 +44,6 @@ for (const testCase of selectedCases) {
           imageContext: [],
         },
         review,
-        outputLanguage: "original",
       }),
       signal: AbortSignal.timeout(Number(process.env.LIVE_EVAL_TIMEOUT_MS || 120_000)),
     });

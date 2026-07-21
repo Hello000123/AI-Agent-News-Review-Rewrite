@@ -101,8 +101,8 @@ export function ReviewSummary({
           <div>
             <strong>Review applies to an earlier version</strong>
             <p>
-              You changed the draft, source URL, or image text after this review. Review the
-              updated source input again before requesting an AI rewrite.
+              You changed the draft or source URL after this review. Review the updated source
+              input again before requesting an AI rewrite.
             </p>
           </div>
         </div>

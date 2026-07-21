@@ -245,7 +245,6 @@ describe("review scoring evaluation set", () => {
     expect(liveUrlCase?.request).toMatchObject({
       draft: "",
       sourceUrl: ORIENTAL_DSE_ARTICLE_URL,
-      outputLanguage: "traditional_chinese",
     });
     expect(liveUrlCase?.inputKind).toBe("url");
 
@@ -254,7 +253,6 @@ describe("review scoring evaluation set", () => {
     );
     expect(publisherControl?.request).toMatchObject({
       sourceUrl: ORIENTAL_DSE_ARTICLE_URL,
-      outputLanguage: "traditional_chinese",
     });
     expect(publisherControl?.request.draft.trim()).not.toBe("");
     expect(publisherControl?.request.draft).toContain("24");

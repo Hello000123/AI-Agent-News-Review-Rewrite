@@ -29,8 +29,6 @@ describe("review workflow", () => {
       {
         draft: "",
         sourceUrl: "https://example.com/article",
-        imageContext: [],
-        outputLanguage: "original",
       },
       {
         dnsLookup: async () => [{ address: "93.184.216.34", family: 4 }],
@@ -199,7 +197,7 @@ describe("rewrite workflow", () => {
       "Council issues verified service update\n\nA verified service update has been published by the council.";
     const completion = vi.fn().mockResolvedValue(finalText);
 
-    const result = await rewriteWithFeedback(source, highReview, "english", completion);
+    const result = await rewriteWithFeedback(source, highReview, completion);
 
     expect(result).toEqual({
       finalText,
@@ -236,7 +234,7 @@ describe("rewrite workflow", () => {
       "Council approves night-bus trial\n\nA night-bus trial was approved by the council on Tuesday.";
     const completion = vi.fn().mockResolvedValueOnce(echo).mockResolvedValueOnce(corrected);
 
-    const result = await rewriteWithFeedback(source, lowReview, "english", completion);
+    const result = await rewriteWithFeedback(source, lowReview, completion);
 
     expect(result).toEqual({
       finalText: corrected,
@@ -264,7 +262,7 @@ describe("rewrite workflow", () => {
       "Council approves six-week night-bus trial\n\nThe council approved the six-week trial on Tuesday.";
     const completion = vi.fn().mockResolvedValueOnce(malformed).mockResolvedValueOnce(corrected);
 
-    const result = await rewriteWithFeedback(source, lowReview, "english", completion);
+    const result = await rewriteWithFeedback(source, lowReview, completion);
 
     expect(result).toEqual({
       finalText: corrected,
@@ -293,7 +291,7 @@ describe("rewrite workflow", () => {
       .mockResolvedValueOnce(correctedBodyOnly);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText:
         "Visits to Central Library increased last year\n\n" + correctedBodyOnly,
@@ -311,7 +309,7 @@ describe("rewrite workflow", () => {
     const completion = vi.fn().mockResolvedValue(bodyOnly);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText:
         "Central Library recorded 448,000 visits last year\n\n" + bodyOnly,
@@ -331,7 +329,7 @@ describe("rewrite workflow", () => {
     const completion = vi.fn().mockResolvedValueOnce(invented).mockResolvedValueOnce(corrected);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: corrected,
       validation: { status: "passed_after_retry", attempts: 2 },
@@ -356,7 +354,7 @@ describe("rewrite workflow", () => {
       .mockResolvedValueOnce(corrected);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: corrected,
       validation: { status: "passed_after_retry", attempts: 2 },
@@ -380,7 +378,7 @@ describe("rewrite workflow", () => {
     const completion = vi.fn().mockResolvedValue(candidate);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: candidate,
       validation: { status: "passed", attempts: 1 },
@@ -402,7 +400,7 @@ describe("rewrite workflow", () => {
       .mockResolvedValueOnce(correctedBody);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: `Library extends opening hours\n\n${correctedBody}`,
       validation: { status: "passed_after_retry", attempts: 2 },
@@ -425,7 +423,7 @@ describe("rewrite workflow", () => {
 
     let failure: AppError | undefined;
     try {
-      await rewriteWithFeedback(source, lowReview, "original", completion);
+      await rewriteWithFeedback(source, lowReview, completion);
     } catch (error) {
       failure = error as AppError;
     }
@@ -458,42 +456,42 @@ describe("rewrite workflow", () => {
     const completion = vi.fn().mockResolvedValue(candidate);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: candidate,
       validation: { status: "passed", attempts: 1 },
     });
   });
 
-  it("accepts exact Chinese-unit conversions in an English rewrite", async () => {
+  it("accepts exact Chinese-unit conversions in a Chinese rewrite", async () => {
     const source = sourceSnapshot(
       "DSE results set a record\n\n今年共有5.8萬名考生，當中24人成為狀元；羅每周訓練3至4小時。",
     );
-    const translated =
-      "DSE results set a record\n\nThis year, 58,000 candidates received results, including 24 top scorers; Luo trained for three to four hours each week.";
-    const completion = vi.fn().mockResolvedValue(translated);
+    const rewritten =
+      "DSE成績創紀錄\n\n今年共有58,000名考生獲發成績，其中24人成為狀元；羅每周訓練3至4小時。";
+    const completion = vi.fn().mockResolvedValue(rewritten);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
-      finalText: translated,
+      finalText: rewritten,
       validation: { status: "passed", attempts: 1 },
     });
     expect(completion).toHaveBeenCalledTimes(1);
   });
 
-  it("retries when an English rewrite romanizes a required Chinese person name", async () => {
+  it("retries when a rewrite romanizes a required Chinese person name", async () => {
     const source = sourceSnapshot(
       "Results released\n\n王繹嘉表示，他計劃留港升學。",
     );
     const romanized =
-      "Results released\n\nWong Yik-ka said he planned to continue his studies in Hong Kong.";
+      "成績公布\n\nWong Yik-ka表示，他計劃留港升學。";
     const corrected =
-      "Results released\n\n王繹嘉 said he planned to continue his studies in Hong Kong.";
+      "成績公布\n\n王繹嘉表示，他計劃留港升學。";
     const completion = vi.fn().mockResolvedValueOnce(romanized).mockResolvedValueOnce(corrected);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: corrected,
       validation: { status: "passed_after_retry", attempts: 2 },
@@ -519,7 +517,7 @@ describe("rewrite workflow", () => {
       .mockResolvedValueOnce(firstCandidate)
       .mockResolvedValueOnce(corrected);
 
-    const result = await rewriteWithFeedback(source, lowReview, "english", completion);
+    const result = await rewriteWithFeedback(source, lowReview, completion);
 
     expect(result).toEqual({
       finalText: corrected,
@@ -553,7 +551,7 @@ describe("rewrite workflow", () => {
       .mockResolvedValueOnce(punctuationOnlyCandidate);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "original", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: "Council confirms unchanged plan\n\n發言人說:「安排維持不變」",
       validation: { status: "passed_after_retry", attempts: 2 },
@@ -576,7 +574,7 @@ describe("rewrite workflow", () => {
 
     let failure: AppError | undefined;
     try {
-      await rewriteWithFeedback(source, lowReview, "english", completion);
+      await rewriteWithFeedback(source, lowReview, completion);
     } catch (error) {
       failure = error as AppError;
     }
@@ -614,7 +612,7 @@ describe("rewrite workflow", () => {
 
     let failure: AppError | undefined;
     try {
-      await rewriteWithFeedback(source, lowReview, "english", completion);
+      await rewriteWithFeedback(source, lowReview, completion);
     } catch (error) {
       failure = error as AppError;
     }
@@ -638,7 +636,7 @@ describe("rewrite workflow", () => {
     const completion = vi.fn().mockResolvedValue(fenced);
 
     await expect(
-      rewriteWithFeedback(source, lowReview, "english", completion),
+      rewriteWithFeedback(source, lowReview, completion),
     ).resolves.toEqual({
       finalText: "Concise headline\n\nA clearer account of the supported facts.",
       validation: { status: "passed", attempts: 1 },

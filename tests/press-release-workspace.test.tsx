@@ -93,36 +93,27 @@ describe("score-first workspace", () => {
     expect(reviewMock).toHaveBeenCalledWith({
       draft: "Original supported facts.",
       sourceUrl: "",
-      imageContext: [],
-      outputLanguage: "original",
     });
     expect(rewriteMock).not.toHaveBeenCalled();
   });
 
-  it("sends URL, selected language, and user-supplied image text without image bytes", async () => {
+  it("sends the URL without exposing picture or output-language inputs", async () => {
     reviewMock.mockResolvedValue(reviewResponse(highReview, "Retrieved article text."));
     const user = userEvent.setup();
     render(<PressReleaseWorkspace initialPassScore={80} />);
 
+    expect(screen.queryByLabelText("Supporting images (optional)")).toBeNull();
+    expect(screen.queryByLabelText("Image captions or OCR text")).toBeNull();
+    expect(screen.queryByLabelText("Output language")).toBeNull();
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+
     await user.type(screen.getByLabelText("Public article URL"), "https://example.com/article");
-    await user.selectOptions(screen.getByLabelText("Output language"), "traditional_chinese");
-    await user.upload(
-      screen.getByLabelText("Supporting images (optional)"),
-      new File(["not sent"], "chart.png", { type: "image/png" }),
-    );
-    await user.type(screen.getByLabelText("Image captions or OCR text"), "圖表顯示24名考生。", {
-      skipClick: false,
-    });
     await user.click(screen.getByRole("button", { name: "Review Draft" }));
 
     await screen.findByText("Score rationale");
     expect(reviewMock).toHaveBeenCalledWith({
       draft: "",
       sourceUrl: "https://example.com/article",
-      outputLanguage: "traditional_chinese",
-      imageContext: [
-        { label: "chart.png", text: "圖表顯示24名考生。", source: "user_caption" },
-      ],
     });
   });
 
@@ -142,45 +133,7 @@ describe("score-first workspace", () => {
 
     expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
       .toBe("Accurate headline\n\nA publication-quality news report.");
-    expect(rewriteMock).toHaveBeenCalledWith(reviewedSource, highReview, "original");
-  });
-
-  it("clears the old rewrite after a language switch and displays only the new-language response", async () => {
-    const reviewedSource = sourceFor("Language-switch source facts.");
-    reviewMock.mockResolvedValue({ ...reviewResponse(highReview), source: reviewedSource });
-    rewriteMock
-      .mockResolvedValueOnce(rewriteResponse("Original-language headline\n\nOriginal-language body."))
-      .mockResolvedValueOnce(rewriteResponse("繁體中文標題\n\n這是最新的繁體中文改寫。"));
-    const user = userEvent.setup();
-    render(<PressReleaseWorkspace initialPassScore={80} />);
-
-    await user.type(
-      screen.getByRole("textbox", { name: /News draft/u }),
-      "Language-switch source facts.",
-    );
-    await user.click(screen.getByRole("button", { name: "Review Draft" }));
-    await screen.findByText("Score rationale");
-    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
-
-    expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
-      .toBe("Original-language headline\n\nOriginal-language body.");
-
-    await user.selectOptions(
-      screen.getByLabelText("Output language"),
-      "traditional_chinese",
-    );
-    expect(screen.queryByLabelText("Final news report text")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
-    expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
-      .toBe("繁體中文標題\n\n這是最新的繁體中文改寫。");
-    expect(rewriteMock).toHaveBeenNthCalledWith(1, reviewedSource, highReview, "original");
-    expect(rewriteMock).toHaveBeenNthCalledWith(
-      2,
-      reviewedSource,
-      highReview,
-      "traditional_chinese",
-    );
+    expect(rewriteMock).toHaveBeenCalledWith(reviewedSource, highReview);
   });
 
   it("marks a changed review stale but restores it when the exact input is restored", async () => {

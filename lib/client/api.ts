@@ -3,7 +3,6 @@ import {
   reviewApiResponseSchema,
   rewriteApiResponseSchema,
   type EditorialInput,
-  type OutputLanguage,
   type QuotationIssue,
   type ReviewResult,
   type SourceSnapshot,
@@ -127,7 +126,7 @@ async function postJson(endpoint: string, body: unknown) {
 export async function requestReview(input: EditorialInput | string) {
   const body: EditorialInput =
     typeof input === "string"
-      ? { draft: input, sourceUrl: "", imageContext: [], outputLanguage: "original" }
+      ? { draft: input, sourceUrl: "" }
       : input;
   const responseBody = await postJson("/api/review", body);
   const parsed = reviewApiResponseSchema.safeParse(responseBody);
@@ -143,9 +142,8 @@ export async function requestReview(input: EditorialInput | string) {
 export async function requestRewrite(
   source: SourceSnapshot,
   review: ReviewResult,
-  outputLanguage: OutputLanguage,
 ) {
-  const responseBody = await postJson("/api/rewrite", { source, review, outputLanguage });
+  const responseBody = await postJson("/api/rewrite", { source, review });
   const parsed = rewriteApiResponseSchema.safeParse(responseBody);
   if (!parsed.success) {
     throw new ApiRequestError(

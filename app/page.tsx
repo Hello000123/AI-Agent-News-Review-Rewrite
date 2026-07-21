@@ -6,18 +6,6 @@ export default function Home() {
 
   return (
     <main>
-      <header className="site-header">
-        <a className="brand" href="#main-content" aria-label="PressReady home">
-          <span className="brand-mark" aria-hidden="true">
-            PR
-          </span>
-          <span>PressReady</span>
-        </a>
-        <span className="header-note">
-          <span aria-hidden="true">●</span> Facts preserved
-        </span>
-      </header>
-
       <div id="main-content" className="page-shell">
         <section className="hero" aria-labelledby="page-title">
           <div className="eyebrow">AI news-report assistant</div>

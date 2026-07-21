@@ -27,7 +27,7 @@ const editorialSource: SourceSnapshot = {
   linkedTitle: "測試計劃參考資料",
   linkedText: "參考資料稱20名參加者完成測試。",
   imageContext: [
-    { label: "圖表 OCR", text: "參加者：24", source: "ocr_text" },
+    { label: "Source-page chart caption", text: "參加者：24", source: "link_caption" },
   ],
 };
 
@@ -70,7 +70,7 @@ describe("agent prompts", () => {
     expect(prompt).not.toContain("contentScore (40%)");
   });
 
-  it("separates the submitted draft from URL and image reference material", () => {
+  it("separates the submitted draft from URL-derived reference material", () => {
     const prompt = createReviewUserPrompt(editorialSource);
     const payload = embeddedJson(prompt) as {
       draftOrigin: string;
@@ -126,7 +126,7 @@ describe("agent prompts", () => {
       "Write an accurate headline, a strong lead, and an inverted-pyramid body",
       "Do not replace words solely to make the output look different",
       "an exact, whitespace-only, or punctuation-only echo of primaryText is not a rewrite",
-      "requiredOutputLanguage is selected by the user",
+      "requiredOutputLanguage is derived automatically from primaryText",
       "one headline, one blank line, then the article body",
       "No markdown, score, commentary, preface, byline, or outlet attribution",
     ]) {
@@ -143,12 +143,8 @@ describe("agent prompts", () => {
     );
   });
 
-  it("sends the full source snapshot, review feedback, and selected language to rewrite", () => {
-    const prompt = createRewriteUserPrompt(
-      editorialSource,
-      highReview,
-      "traditional_chinese",
-    );
+  it("sends the full source snapshot, review feedback, and detected language to rewrite", () => {
+    const prompt = createRewriteUserPrompt(editorialSource, highReview);
     const payload = embeddedJson(prompt) as {
       requiredOutputLanguage: string;
       allowedNumericValues: string[];
@@ -199,17 +195,20 @@ describe("agent prompts", () => {
     ).toEqual(["王繹嘉", "陳凱然", "馬端行", "劉彥彤", "程熹", "羅苡庭"]);
   });
 
-  it("detects primary language fairly and honors explicit output-language locks", () => {
+  it("detects and enforces the primary input language automatically", () => {
     const traditionalDraft =
       "香港初創公司於7月16日表示，已在數碼港完成首輪測試，項目主管稱開始日期尚未確定。";
     const simplifiedDraft =
       "研究机构于7月16日发布初步测试结果，项目负责人表示数据仍在审核。";
+    const englishDraft = "The reporter filed the English article today.";
 
     expect(determineRequiredOutputLanguage(traditionalDraft)).toMatch(/^Traditional Chinese/);
     expect(determineRequiredOutputLanguage(simplifiedDraft)).toMatch(/^Simplified Chinese/);
-    expect(determineRequiredOutputLanguage("The reporter filed the English article today.")).toBe(
-      "English",
-    );
+    expect(determineRequiredOutputLanguage(englishDraft)).toBe("English");
+    expect(determineRequiredOutputLanguage("Breaking news")).toBe("English");
+    expect(determineRequiredOutputLanguage("Breaking")).toBe("English");
+    expect(determineRequiredOutputLanguage("雨")).toMatch(/^Chinese/);
+    expect(determineRequiredOutputLanguage("「下雨」")).toMatch(/^Chinese/);
     expect(determineRequiredOutputLanguage("Le conseil a approuvé le projet mardi.")).toMatch(
       /^Original primary language/,
     );
@@ -218,22 +217,27 @@ describe("agent prompts", () => {
       preservesRequiredOutputLanguage(
         traditionalDraft,
         "Testing is complete\n\nOfficials said the testing process is complete.",
-        "english",
-      ),
-    ).toBe(true);
-    expect(
-      preservesRequiredOutputLanguage(
-        traditionalDraft,
-        "測試已完成\n\n項目主管表示測試工作已完成。",
-        "english",
       ),
     ).toBe(false);
     expect(
       preservesRequiredOutputLanguage(
         traditionalDraft,
-        "測試工作完成\n\n項目主管表示，首輪測試已經完成，結果仍在審核。",
-        "traditional_chinese",
+        "測試已完成\n\n項目主管表示測試工作已完成。",
       ),
     ).toBe(true);
+    expect(
+      preservesRequiredOutputLanguage(
+        englishDraft,
+        "English report filed\n\nOfficials said the English report was filed today.",
+      ),
+    ).toBe(true);
+    expect(
+      preservesRequiredOutputLanguage(
+        englishDraft,
+        "報道已提交\n\n官員表示，英文報道已於今日提交。",
+      ),
+    ).toBe(false);
+    expect(preservesRequiredOutputLanguage("Breaking", "突發\n\n消息已公布。")).toBe(false);
+    expect(preservesRequiredOutputLanguage("「下雨」", "Rain\n\nThe report says rain.")).toBe(false);
   });
 });

@@ -1,5 +1,4 @@
 import type {
-  OutputLanguage,
   QuotationIssue,
   ReviewResult,
   SourceSnapshot,
@@ -244,7 +243,8 @@ function maskVerbatimSourceContent(text: string, sourceDraft: string) {
 }
 
 export function determineRequiredOutputLanguage(draft: string): RequiredOutputLanguage {
-  const narrative = maskVerbatimSourceContent(draft, draft);
+  const maskedNarrative = maskVerbatimSourceContent(draft, draft);
+  const narrative = /[\p{L}\p{N}]/u.test(maskedNarrative) ? maskedNarrative : draft;
   if (
     /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(narrative)
   ) {
@@ -257,15 +257,16 @@ export function determineRequiredOutputLanguage(draft: string): RequiredOutputLa
   const englishSignals = words.filter((word) =>
     englishSignalWords.has(word.toLocaleLowerCase("en-US")),
   ).length;
+  const asciiOnly = !/[^\x00-\x7f]/u.test(narrative);
   const englishIsPrimary =
-    words.length >= 3 &&
-    englishSignals >= 1 &&
+    words.length >= 1 &&
+    (englishSignals >= 1 || (asciiOnly && hanCharacters === 0)) &&
     words.length >= hanRuns * 3;
   if (englishIsPrimary) return "English";
 
   const chineseIsPrimary =
-    hanCharacters >= 2 &&
-    (words.length === 0 || (hanRuns >= 2 && hanCharacters >= words.length));
+    hanCharacters >= 1 &&
+    (words.length === 0 || (hanRuns >= 1 && hanCharacters >= words.length));
   if (!chineseIsPrimary) {
     return "Original primary language and script (classification is uncertain; preserve the draft's language and script and never translate it)";
   }
@@ -281,23 +282,11 @@ export function determineRequiredOutputLanguage(draft: string): RequiredOutputLa
   return "Chinese (preserve the original draft's Chinese script; do not translate the report into English)";
 }
 
-export function resolveRequiredOutputLanguage(
-  draft: string,
-  outputLanguage: OutputLanguage = "original",
-): RequiredOutputLanguage {
-  if (outputLanguage === "english") return "English";
-  if (outputLanguage === "traditional_chinese") {
-    return "Traditional Chinese (use Hong Kong newsroom syntax and Chinese punctuation; do not translate the report into English or convert it to Simplified Chinese)";
-  }
-  return determineRequiredOutputLanguage(draft);
-}
-
 export function preservesRequiredOutputLanguage(
   draft: string,
   output: string,
-  outputLanguage: OutputLanguage = "original",
 ) {
-  const requiredOutputLanguage = resolveRequiredOutputLanguage(draft, outputLanguage);
+  const requiredOutputLanguage = determineRequiredOutputLanguage(draft);
   if (requiredOutputLanguage.startsWith("Original primary language")) return true;
 
   const narrative = maskVerbatimSourceContent(output, draft);
@@ -494,8 +483,8 @@ export const REWRITE_SYSTEM_PROMPT = [
   "- Do not create or fill a placeholder. Preserve necessary existing placeholders or state only the uncertainty already present.",
   "",
   "LANGUAGE",
-  "- requiredOutputLanguage is selected by the user (or resolved from the primary article when 'original' was selected) and is mandatory for the headline and narration.",
-  "- Direct quotations and proper nouns remain verbatim source-script exceptions. Use natural English or natural Traditional Chinese Hong Kong newsroom syntax as selected.",
+  "- requiredOutputLanguage is derived automatically from primaryText and is mandatory for the headline and narration. Preserve the primary article's language and script; never translate it into another language.",
+  "- Direct quotations and proper nouns remain verbatim source-script exceptions. Use natural newsroom syntax in the detected source language and preserve Traditional or Simplified Chinese script as detected.",
   "",
   "OUTPUT",
   "Return text only: one headline, one blank line, then the article body. No markdown, score, commentary, preface, byline, or outlet attribution.",
@@ -540,7 +529,6 @@ export const CONSERVATIVE_REWRITE_CORRECTION_SYSTEM_PROMPT = [
 export function createRewriteUserPrompt(
   sourceInput: SourceSnapshot | string,
   review: ReviewResult,
-  outputLanguage: OutputLanguage = "original",
 ) {
   const source = normalizeSource(sourceInput);
   const sourceCorpus = [
@@ -556,7 +544,7 @@ export function createRewriteUserPrompt(
   const verbatimMixedLanguageTerms = extractVerbatimMixedLanguageTerms(source.primaryText);
   const verbatimSourceScriptNames = extractVerbatimSourceScriptNames(source.primaryText);
   const allowedNumericValues = extractNumericValues(sourceCorpus);
-  const requiredOutputLanguage = resolveRequiredOutputLanguage(source.primaryText, outputLanguage);
+  const requiredOutputLanguage = determineRequiredOutputLanguage(source.primaryText);
 
   return [
     "Rewrite the primary article now. The user explicitly requested a rewrite regardless of review score.",
@@ -583,9 +571,8 @@ export function createQuotationCorrectionPrompt(
   candidateText: string,
   issues: QuotationIssue[],
   source: SourceSnapshot,
-  outputLanguage: OutputLanguage,
 ) {
-  const requiredOutputLanguage = resolveRequiredOutputLanguage(source.primaryText, outputLanguage);
+  const requiredOutputLanguage = determineRequiredOutputLanguage(source.primaryText);
   return [
     "Correct the candidate article once. Change only what is needed to restore the failed quotations exactly and keep all other supported wording and facts stable.",
     `Keep headline and narration in ${requiredOutputLanguage}. Return only headline, blank line, and article body.`,
@@ -606,13 +593,12 @@ export function createUnchangedRewriteCorrectionPrompt(
   candidateText: string,
   source: SourceSnapshot,
   review: ReviewResult,
-  outputLanguage: OutputLanguage,
 ) {
   return [
     "The candidate was an exact, whitespace-only, or punctuation-only copy, so it did not satisfy the explicit rewrite request.",
     "Make genuine editorial improvements supported by the review—especially structure, clarity, flow, concision, or journalistic style—without gratuitous synonym changes and without changing facts or quoted wording.",
     "If the review has no material weakness, produce a conservative editorial variant: improve the headline and restructure at least one non-quotation sentence or supported clause sequence. Preserve good source wording elsewhere; do not respond with the same text again.",
-    `LANGUAGE LOCK: ${resolveRequiredOutputLanguage(source.primaryText, outputLanguage)}`,
+    `LANGUAGE LOCK: ${determineRequiredOutputLanguage(source.primaryText)}`,
     JSON.stringify({ candidateText, reviewFeedback: review }, null, 2),
   ].join("\n\n");
 }
@@ -622,10 +608,9 @@ export function createRewriteValidationCorrectionPrompt(
   failure: { code: string; message: string },
   source: SourceSnapshot,
   review: ReviewResult,
-  outputLanguage: OutputLanguage,
 ) {
   return [
-    createRewriteUserPrompt(source, review, outputLanguage),
+    createRewriteUserPrompt(source, review),
     "ONE CORRECTION ATTEMPT",
     "The candidate failed deterministic validation. Correct only the identified failure while preserving every supported fact, exact quotation, name, figure, uncertainty, and attribution.",
     "Return one headline, one blank line, and a complete article body. Do not add commentary or validation notes.",
