@@ -10,11 +10,14 @@ import {
   analyzeResults,
   buildTasks,
   csvEscape,
+  draftSha256,
   formatProgress,
+  loadDataset,
   loadResults,
   parseCsv,
   predictCategory,
   rangeDistance,
+  reconcileResults,
   reviewTask,
   runCategoryWorkers,
   serializeCsv,
@@ -75,6 +78,38 @@ test("CSV round-trips BOM-safe multiline Traditional Chinese text", () => {
   assert.equal(csvEscape("a,b"), '"a,b"');
 });
 
+test("the reusable quote-all dataset loads and validates", async () => {
+  const datasetPath = new URL("./chinese_review_drafts.csv", import.meta.url);
+  const { rows, warnings } = await loadDataset(datasetPath);
+  assert.equal(rows.length, 150);
+  assert.equal(warnings.length, 0);
+  assert.equal(rows[0].global_order, "001");
+  assert.equal(rows.at(-1).global_order, "150");
+});
+
+test("legacy results load safely with blank fingerprints for one-time invalidation", async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "chinese-review-legacy-"));
+  const resultsPath = path.join(temporaryDirectory, "legacy-results.csv");
+  const legacyHeaders = RESULT_HEADERS.slice(0, -2);
+  const legacyRow = Object.fromEntries(legacyHeaders.map((header) => [header, ""]));
+  legacyRow.global_order = "001";
+  legacyRow.draft_id = "ZH-EXCELLENT-001";
+  legacyRow.scenario_id = "001";
+  legacyRow.category = "Excellent";
+  legacyRow.repeat_number = 1;
+  legacyRow.test_status = "Success";
+  await fs.writeFile(
+    resultsPath,
+    serializeCsv(legacyHeaders, [legacyRow], { bom: true }),
+    "utf8",
+  );
+  const [loaded] = await loadResults(resultsPath);
+  assert.deepEqual(Object.keys(loaded), RESULT_HEADERS);
+  assert.equal(loaded.draft_sha256, "");
+  assert.equal(loaded.reviewer_sha256, "");
+  await fs.rm(temporaryDirectory, { recursive: true, force: true });
+});
+
 test("requested score bands classify inclusive boundary values", () => {
   const expected = new Map([
     [100, "Excellent"], [85, "Excellent"], [84, "Good"], [70, "Good"],
@@ -121,6 +156,7 @@ test("an exhausted or non-retryable failure is saved as an error, never score ze
   assert.notEqual(result.actual_overall_score, 0);
   assert.equal(result.error_code, "DEEPSEEK_AUTH_ERROR");
   assert.equal(result.retry_count, 0);
+  assert.equal(result.draft_sha256, draftSha256(task));
   const logRecords = (await fs.readFile(path.join(temporaryDirectory, "responses.jsonl"), "utf8"))
     .trim()
     .split("\n")
@@ -178,6 +214,7 @@ test("five category workers honor concurrency, ordering, retry, persistence, res
       retryLimit: 1,
       backoffMs: 0,
       modelName: "mock-model",
+      reviewerSha256: "reviewer-v1",
       rawLogPath,
       fetchImpl,
       sleepImpl: async () => {},
@@ -212,6 +249,9 @@ test("five category workers honor concurrency, ordering, retry, persistence, res
   const persisted = await loadResults(resultsPath);
   assert.equal(persisted.length, 10);
   assert.deepEqual(Object.keys(persisted[0]), RESULT_HEADERS);
+  assert.ok(persisted.every((result) => result.draft_sha256.length === 64));
+  assert.ok(persisted.every((result) => result.reviewer_sha256 === "reviewer-v1"));
+  assert.equal(reconcileResults(drafts, persisted, "reviewer-v1").staleResults.length, 0);
   const logRecords = (await fs.readFile(rawLogPath, "utf8")).trim().split("\n").map(JSON.parse);
   assert.equal(logRecords.length, 11);
   assert.equal(logRecords.filter((record) => record.outcome === "success").length, 10);
@@ -228,6 +268,7 @@ test("five category workers honor concurrency, ordering, retry, persistence, res
       retryLimit: 1,
       backoffMs: 0,
       modelName: "mock-model",
+      reviewerSha256: "reviewer-v1",
       rawLogPath,
       fetchImpl,
       sleepImpl: async () => {},
@@ -237,8 +278,17 @@ test("five category workers honor concurrency, ordering, retry, persistence, res
   assert.equal(requestCount, beforeResume);
   assert.equal(results.length, 10);
 
-  await runCategoryWorkers({
-    tasks,
+  const changedDrafts = drafts.map((draft, index) => index === 0
+    ? { ...draft, draft_text: `${draft.draft_text} changed` }
+    : draft);
+  const changedTasks = buildTasks(changedDrafts, { repeats: 1 });
+  const changedReconciliation = reconcileResults(changedDrafts, results, "reviewer-v1");
+  assert.equal(changedReconciliation.currentResults.length, 9);
+  assert.equal(changedReconciliation.staleResults.length, 1);
+  assert.deepEqual(changedReconciliation.staleResults[0].staleReasons, ["draft_changed"]);
+
+  results = await runCategoryWorkers({
+    tasks: changedTasks,
     existingResults: results,
     resultsPath,
     requestOptions: {
@@ -247,6 +297,49 @@ test("five category workers honor concurrency, ordering, retry, persistence, res
       retryLimit: 1,
       backoffMs: 0,
       modelName: "mock-model",
+      reviewerSha256: "reviewer-v1",
+      rawLogPath,
+      fetchImpl,
+      sleepImpl: async () => {},
+    },
+    concurrency: 5,
+  });
+  assert.equal(requestCount, beforeResume + 1);
+  assert.equal(results.find((result) => result.draft_id === changedTasks[0].draft_id).draft_sha256, draftSha256(changedTasks[0]));
+
+  const reviewerReconciliation = reconcileResults(changedDrafts, results, "reviewer-v2");
+  assert.equal(reviewerReconciliation.currentResults.length, 0);
+  assert.equal(reviewerReconciliation.staleResults.length, 10);
+  results = await runCategoryWorkers({
+    tasks: changedTasks,
+    existingResults: results,
+    resultsPath,
+    requestOptions: {
+      baseUrl: "http://127.0.0.1:3999",
+      timeoutMs: 5_000,
+      retryLimit: 1,
+      backoffMs: 0,
+      modelName: "mock-model",
+      reviewerSha256: "reviewer-v2",
+      rawLogPath,
+      fetchImpl,
+      sleepImpl: async () => {},
+    },
+    concurrency: 5,
+  });
+  assert.equal(requestCount, beforeResume + 11);
+
+  await runCategoryWorkers({
+    tasks: changedTasks,
+    existingResults: results,
+    resultsPath,
+    requestOptions: {
+      baseUrl: "http://127.0.0.1:3999",
+      timeoutMs: 5_000,
+      retryLimit: 1,
+      backoffMs: 0,
+      modelName: "mock-model",
+      reviewerSha256: "reviewer-v2",
       rawLogPath,
       fetchImpl,
       sleepImpl: async () => {},
@@ -254,9 +347,9 @@ test("five category workers honor concurrency, ordering, retry, persistence, res
     concurrency: 5,
     force: true,
   });
-  assert.equal(requestCount, beforeResume + 10);
+  assert.equal(requestCount, beforeResume + 21);
 
-  const analysis = analyzeResults(drafts, results);
+  const analysis = analyzeResults(changedDrafts, results);
   assert.equal(analysis.successful_tests, 10);
   assert.equal(analysis.failed_tests, 0);
   assert.equal(analysis.draft_classification_accuracy, 1);

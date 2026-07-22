@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,9 +9,11 @@ import { buildXlsxReport } from "./build-xlsx-report.mjs";
 import {
   analyzeResults,
   buildTasks,
+  datasetSha256,
   formatProgress,
   loadDataset,
   loadResults,
+  reconcileResults,
   resultKey,
   runCategoryWorkers,
   writeResultsCsv,
@@ -18,6 +21,19 @@ import {
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, "..", "..");
+
+const REVIEWER_SOURCE_FILES = Object.freeze([
+  "app/api/review/route.ts",
+  "lib/server/agents/review-agent.ts",
+  "lib/server/agents/prompts.ts",
+  "lib/server/agents/time-context.ts",
+  "lib/server/agents/workflow.ts",
+  "lib/server/agents/deepseek-client.ts",
+  "lib/server/config.ts",
+  "lib/server/http.ts",
+  "lib/server/sources/source-context.ts",
+  "lib/shared/contracts.ts",
+]);
 
 function positiveInteger(value, name, minimum, maximum) {
   const parsed = Number(value);
@@ -65,6 +81,64 @@ async function projectEnvironment() {
     if (error?.code === "ENOENT") return {};
     throw error;
   }
+}
+
+function beforeMarker(text, marker) {
+  const index = text.indexOf(marker);
+  return index === -1 ? text : text.slice(0, index);
+}
+
+function betweenMarkers(text, startMarker, endMarker) {
+  const start = text.indexOf(startMarker);
+  if (start === -1) return text;
+  const end = text.indexOf(endMarker, start + startMarker.length);
+  return end === -1 ? text.slice(start) : text.slice(start, end);
+}
+
+function reviewerRelevantSource(relativePath, text) {
+  if (relativePath.endsWith("/prompts.ts")) {
+    return beforeMarker(text, "export const REWRITE_SYSTEM_PROMPT");
+  }
+  if (relativePath.endsWith("/workflow.ts")) {
+    return beforeMarker(text, "export async function rewriteWithFeedback");
+  }
+  if (relativePath.endsWith("/contracts.ts")) {
+    const reviewContracts = beforeMarker(text, "export const rewriteLengthOptionSchema")
+      .replace(/^export const MAX_REWRITE_[^\r\n]+(?:\r?\n)?/gmu, "");
+    const reviewApiContract = betweenMarkers(
+      text,
+      "export const reviewApiResponseSchema",
+      "export const quotationIssueKindSchema",
+    );
+    return `${reviewContracts}\n${reviewApiContract}`;
+  }
+  return text;
+}
+
+async function calculateReviewerSha256(modelName, baseUrl, localEnv) {
+  const hash = createHash("sha256");
+  hash.update(JSON.stringify({
+    model_name: modelName,
+    base_url: baseUrl,
+    configured_model: process.env.DEEPSEEK_MODEL || localEnv.DEEPSEEK_MODEL || "",
+    review_pass_score: process.env.REVIEW_PASS_SCORE || localEnv.REVIEW_PASS_SCORE || "",
+    stream_mode: process.env.DEEPSEEK_STREAM || localEnv.DEEPSEEK_STREAM || "",
+  }));
+
+  for (const relativePath of REVIEWER_SOURCE_FILES) {
+    const absolutePath = path.join(projectRoot, ...relativePath.split("/"));
+    let source;
+    try {
+      source = await fs.readFile(absolutePath, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      source = `[missing:${relativePath}]`;
+    }
+    const relevantSource = reviewerRelevantSource(relativePath, source);
+    hash.update(`\n${relativePath}\n${relevantSource.length}\n${relevantSource}`);
+  }
+
+  return hash.digest("hex");
 }
 
 function normalizeBaseUrl(value) {
@@ -194,10 +268,27 @@ async function parseOptions(argumentsList) {
   options.baseUrl = normalizeBaseUrl(options.baseUrl);
   options.datasetPath = path.resolve(options.datasetPath);
   options.outputDirectory = path.resolve(options.outputDirectory);
+  options.reviewerSha256 = await calculateReviewerSha256(options.modelName, options.baseUrl, localEnv);
   return options;
 }
 
-async function appendRunRecord(rawLogPath, options, datasetCount, taskCount, recordType) {
+function staleReasonCounts(staleResults) {
+  const counts = {};
+  for (const { staleReasons } of staleResults) {
+    for (const reason of staleReasons) counts[reason] = (counts[reason] ?? 0) + 1;
+  }
+  return counts;
+}
+
+async function appendRunRecord(
+  rawLogPath,
+  options,
+  datasetCount,
+  taskCount,
+  recordType,
+  currentDatasetSha256,
+  staleResults,
+) {
   await fs.mkdir(path.dirname(rawLogPath), { recursive: true });
   await fs.appendFile(
     rawLogPath,
@@ -215,9 +306,27 @@ async function appendRunRecord(rawLogPath, options, datasetCount, taskCount, rec
       smoke: options.smoke,
       force: options.force,
       model_name: options.modelName,
+      dataset_sha256: currentDatasetSha256,
+      reviewer_sha256: options.reviewerSha256,
+      stale_result_count: staleResults.length,
+      stale_reason_counts: staleReasonCounts(staleResults),
     })}\n`,
     "utf8",
   );
+}
+
+async function appendStaleResultRecords(rawLogPath, staleResults) {
+  if (staleResults.length === 0) return;
+  await fs.mkdir(path.dirname(rawLogPath), { recursive: true });
+  const archivedAt = new Date().toISOString();
+  const records = staleResults.map(({ result, staleReasons }) => JSON.stringify({
+    schema_version: 1,
+    record_type: "stale_result",
+    archived_at: archivedAt,
+    stale_reasons: staleReasons,
+    result,
+  }));
+  await fs.appendFile(rawLogPath, `${records.join("\n")}\n`, "utf8");
 }
 
 function createProgressPrinter() {
@@ -251,12 +360,22 @@ export async function main(argumentsList = process.argv.slice(2)) {
 
   const { rows: dataset, warnings } = await loadDataset(options.datasetPath);
   const tasks = buildTasks(dataset, { repeats: options.repeats, smoke: options.smoke });
-  let results = await loadResults(resultsPath);
-  await writeResultsCsv(resultsPath, results);
+  const currentDatasetSha256 = datasetSha256(dataset);
+  const loadedResults = await loadResults(resultsPath);
+  const reconciliation = reconcileResults(dataset, loadedResults, options.reviewerSha256);
+  let results = reconciliation.currentResults;
 
   process.stdout.write(
-    `Dataset valid: ${dataset.length} drafts; selected tests: ${tasks.length}; model label: ${options.modelName}.\n`,
+    `Dataset valid: ${dataset.length} drafts; selected tests: ${tasks.length}; model label: ${options.modelName}; dataset ${currentDatasetSha256.slice(0, 12)}; reviewer ${options.reviewerSha256.slice(0, 12)}.\n`,
   );
+  if (reconciliation.staleResults.length > 0) {
+    const reasonText = Object.entries(staleReasonCounts(reconciliation.staleResults))
+      .map(([reason, count]) => `${reason}: ${count}`)
+      .join(", ");
+    process.stdout.write(
+      `Ignored ${reconciliation.staleResults.length} stale result row(s) (${reasonText}). Historical responses remain in the append-only JSONL log.\n`,
+    );
+  }
   if (warnings.length > 0) {
     process.stdout.write(`Dataset similarity warnings: ${warnings.length}. Review with --dry-run output if drafts change.\n`);
   }
@@ -268,7 +387,11 @@ export async function main(argumentsList = process.argv.slice(2)) {
     dataset.length,
     tasks.length,
     options.dryRun ? "dry_run" : options.reportOnly ? "report_only" : "test_run",
+    currentDatasetSha256,
+    reconciliation.staleResults,
   );
+  await appendStaleResultRecords(rawLogPath, reconciliation.staleResults);
+  await writeResultsCsv(resultsPath, results);
 
   if (!noRequestMode) {
     results = await runCategoryWorkers({
@@ -281,6 +404,7 @@ export async function main(argumentsList = process.argv.slice(2)) {
         retryLimit: options.retries,
         backoffMs: options.backoffMs,
         modelName: options.modelName,
+        reviewerSha256: options.reviewerSha256,
         rawLogPath,
       },
       concurrency: options.concurrency,

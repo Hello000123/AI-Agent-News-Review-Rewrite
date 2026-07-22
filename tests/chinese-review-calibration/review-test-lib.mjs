@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { createHash } from "node:crypto";
 
 export const CATEGORY_CONFIG = Object.freeze([
   { name: "Excellent", idToken: "EXCELLENT", minimum: 85, maximum: 100 },
@@ -55,7 +56,13 @@ export const RESULT_HEADERS = Object.freeze([
   "model_name",
   "test_timestamp",
   "http_status",
+  "draft_sha256",
+  "reviewer_sha256",
 ]);
+
+const LEGACY_RESULT_HEADERS = Object.freeze(
+  RESULT_HEADERS.filter((header) => !["draft_sha256", "reviewer_sha256"].includes(header)),
+);
 
 export const REVIEW_SCORE_FIELDS = Object.freeze([
   ["factualCompletenessScore", "factual_completeness_score"],
@@ -78,6 +85,18 @@ const simplifiedOnlyCharacters = new Set(Array.from(
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function draftSha256(draft) {
+  return sha256(JSON.stringify(DATASET_HEADERS.map((header) => draft[header] ?? "")));
+}
+
+export function datasetSha256(rows) {
+  return sha256(rows.map((row) => draftSha256(row)).join("\n"));
 }
 
 export function csvEscape(value) {
@@ -289,13 +308,12 @@ export async function loadDataset(datasetPath) {
     throw new Error("Dataset CSV must be UTF-8 with BOM.");
   }
   const text = buffer.toString("utf8");
-  const firstLine = text.slice(1).split(/\r?\n/u, 1)[0];
-  const headers = parseCsv(`${firstLine}\n`)[0] ?? Object.fromEntries(firstLine.split(",").map((header) => [header, ""]));
-  const actualHeaders = Object.keys(headers);
+  const parsedRows = parseCsv(text);
+  const actualHeaders = parsedRows.length > 0 ? Object.keys(parsedRows[0]) : [];
   if (actualHeaders.join("\u0000") !== DATASET_HEADERS.join("\u0000")) {
     throw new Error(`Dataset headers must be: ${DATASET_HEADERS.join(", ")}.`);
   }
-  const rows = parseCsv(text).map((row) => ({
+  const rows = parsedRows.map((row) => ({
     ...row,
     expected_min: Number(row.expected_min),
     expected_max: Number(row.expected_max),
@@ -361,7 +379,9 @@ export async function loadResults(resultsPath) {
     const rows = parseCsv(text);
     if (rows.length === 0) return [];
     const actualHeaders = Object.keys(rows[0]);
-    if (actualHeaders.join("\u0000") !== RESULT_HEADERS.join("\u0000")) {
+    const currentSchema = actualHeaders.join("\u0000") === RESULT_HEADERS.join("\u0000");
+    const legacySchema = actualHeaders.join("\u0000") === LEGACY_RESULT_HEADERS.join("\u0000");
+    if (!currentSchema && !legacySchema) {
       throw new Error("Existing results CSV has an incompatible header schema.");
     }
     const numericFields = new Set([
@@ -372,13 +392,42 @@ export async function loadResults(resultsPath) {
       "distance_below_expected_range", "distance_above_expected_range", "pass_score",
       "retry_count", "response_time_ms", "http_status",
     ]);
-    return rows.map((row) => Object.fromEntries(
-      Object.entries(row).map(([key, value]) => [key, numericFields.has(key) && value !== "" ? Number(value) : value]),
-    ));
+    return rows.map((row) => {
+      const migrated = legacySchema
+        ? { ...row, draft_sha256: "", reviewer_sha256: "" }
+        : row;
+      return Object.fromEntries(
+        Object.entries(migrated).map(([key, value]) => [
+          key,
+          numericFields.has(key) && value !== "" ? Number(value) : value,
+        ]),
+      );
+    });
   } catch (error) {
     if (error?.code === "ENOENT") return [];
     throw error;
   }
+}
+
+export function reconcileResults(dataset, results, reviewerSha256 = "") {
+  const draftFingerprints = new Map(dataset.map((draft) => [draft.draft_id, draftSha256(draft)]));
+  const currentResults = [];
+  const staleResults = [];
+
+  for (const result of results) {
+    const expectedDraftSha256 = draftFingerprints.get(result.draft_id);
+    const staleReasons = [];
+    if (!expectedDraftSha256) staleReasons.push("draft_removed");
+    else if (result.draft_sha256 !== expectedDraftSha256) staleReasons.push("draft_changed");
+    if (reviewerSha256 && result.reviewer_sha256 !== reviewerSha256) {
+      staleReasons.push("reviewer_changed");
+    }
+
+    if (staleReasons.length > 0) staleResults.push({ result, staleReasons });
+    else currentResults.push(result);
+  }
+
+  return { currentResults: sortResults(currentResults), staleResults };
 }
 
 export function validateReviewApiResponse(body) {
@@ -430,7 +479,16 @@ export function validateReviewApiResponse(body) {
   return body;
 }
 
-function successResult(task, body, retryCount, responseTimeMs, modelName, timestamp, httpStatus) {
+function successResult(
+  task,
+  body,
+  retryCount,
+  responseTimeMs,
+  modelName,
+  timestamp,
+  httpStatus,
+  reviewerSha256,
+) {
   const review = body.review;
   const actual = review.overallScore;
   const distance = rangeDistance(actual, task.expected_min, task.expected_max);
@@ -470,10 +528,12 @@ function successResult(task, body, retryCount, responseTimeMs, modelName, timest
     model_name: modelName,
     test_timestamp: timestamp,
     http_status: httpStatus,
+    draft_sha256: draftSha256(task),
+    reviewer_sha256: reviewerSha256,
   };
 }
 
-function errorResult(task, failure, retryCount, responseTimeMs, modelName, timestamp) {
+function errorResult(task, failure, retryCount, responseTimeMs, modelName, timestamp, reviewerSha256) {
   return {
     global_order: task.global_order,
     draft_id: task.draft_id,
@@ -509,6 +569,8 @@ function errorResult(task, failure, retryCount, responseTimeMs, modelName, times
     model_name: modelName,
     test_timestamp: timestamp,
     http_status: failure.httpStatus ?? "",
+    draft_sha256: draftSha256(task),
+    reviewer_sha256: reviewerSha256,
   };
 }
 
@@ -573,6 +635,7 @@ export async function reviewTask(task, options) {
     retryLimit,
     backoffMs,
     modelName,
+    reviewerSha256 = "",
     rawLogPath,
     fetchImpl = fetch,
     sleepImpl = sleep,
@@ -631,6 +694,8 @@ export async function reviewTask(task, options) {
       draft_id: task.draft_id,
       scenario_id: task.scenario_id,
       category: task.category,
+      draft_sha256: draftSha256(task),
+      reviewer_sha256: reviewerSha256,
       repeat_number: task.repeat_number,
       attempt_number: attempt + 1,
       started_at: startedAt,
@@ -654,6 +719,7 @@ export async function reviewTask(task, options) {
         modelName,
         attemptCompletedAt,
         response.status,
+        reviewerSha256,
       );
     }
 
@@ -669,6 +735,7 @@ export async function reviewTask(task, options) {
     Math.round(performance.now() - taskStarted),
     modelName,
     now().toISOString(),
+    reviewerSha256,
   );
 }
 
@@ -770,8 +837,16 @@ export async function runCategoryWorkers({
     throw new Error("concurrency must be an integer from 1 to 5.");
   }
   const resultMap = new Map(existingResults.map((result) => [resultKey(result), result]));
-  const selectedKeys = new Set(tasks.map(resultKey));
-  if (force) for (const key of selectedKeys) resultMap.delete(key);
+  for (const task of tasks) {
+    const key = resultKey(task);
+    const existing = resultMap.get(key);
+    const fingerprintChanged = existing && existing.draft_sha256 !== draftSha256(task);
+    const reviewerChanged =
+      existing &&
+      requestOptions.reviewerSha256 &&
+      existing.reviewer_sha256 !== requestOptions.reviewerSha256;
+    if (force || fingerprintChanged || reviewerChanged) resultMap.delete(key);
+  }
 
   const pending = tasks.filter((task) => {
     const existing = resultMap.get(resultKey(task));

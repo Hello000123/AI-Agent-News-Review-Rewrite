@@ -24,6 +24,12 @@ The public review response contains six component scores, `weightedScore`, optio
 
 The model label is read in this order: `EVAL_MODEL`, `DEEPSEEK_MODEL` in the current environment, the non-secret `DEEPSEEK_MODEL` value in `.env.local`, then `server-configured-model`. Successful `/api/review` responses do not themselves expose a model name.
 
+## Safe resume and change detection
+
+Every saved result contains a SHA-256 fingerprint of its complete draft and a second fingerprint of the Review Agent implementation, endpoint URL, relevant non-secret configuration, and recorded model label. Resume reuses a successful draft/repeat only when both fingerprints still match. If a draft, endpoint, review prompt, scoring workflow, response contract, pass threshold, stream setting, or model label changes, the old row is archived in the append-only JSONL log before it is excluded from the current CSV and workbook, and the affected draft is tested again on the next live run. Restart the local application after changing Review Agent code so the running endpoint matches the fingerprinted checkout.
+
+Result files made by an older harness do not contain these fingerprints. They remain readable, but their rows are treated as stale once so that a changed draft or reviewer can never silently reuse an obsolete score. CSV files with quoted or unquoted headers are both supported.
+
 Start the application in one PowerShell window:
 
 ```powershell
@@ -53,7 +59,7 @@ Run the complete test (150 paid review requests at the default one repeat). Obta
 node tests\chinese-review-calibration\run-chinese-review-test.mjs
 ```
 
-Resume an interrupted complete test. This is intentionally the same command; successful draft/repeat pairs are skipped and errors are retried:
+Resume an interrupted complete test. This is intentionally the same command; successful draft/repeat pairs with matching fingerprints are skipped, while errors and stale rows are retried:
 
 ```powershell
 node tests\chinese-review-calibration\run-chinese-review-test.mjs
@@ -90,7 +96,7 @@ Five category workers are created. Each worker processes its category in ascendi
 
 Requested predicted categories use these inclusive score bands: Excellent 85–100, Good 70–84, Normal 50–69, Bad 30–49, and Extremely Bad 0–29. These test categories are separate from the Review Agent’s own readiness-band labels.
 
-- Results contains one row per draft/repeat and records all returned score fields, range distance, predicted category, status, diagnostics, latency, model label, and timestamp.
+- Results contains one row per draft/repeat and records all returned score fields, range distance, predicted category, status, diagnostics, latency, model label, timestamp, draft fingerprint, and reviewer fingerprint.
 - Category Summary reports successful/failed counts; average, median, minimum, maximum, and population standard deviation; inside/below/above rates; mean range distance; and classification accuracy.
 - Summary contains overall metrics (including scored-draft accuracy, coverage, and accuracy across all 150 planned drafts), a confusion matrix, the ten largest out-of-range mismatches, all lower-quality/higher-score inversions, repeated errors, suspicious patterns, and a plain-language calibration interpretation.
 - Error Log contains failures only.

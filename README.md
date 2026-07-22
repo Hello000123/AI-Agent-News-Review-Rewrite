@@ -118,6 +118,13 @@ Official references:
 
 Open [http://localhost:3000](http://localhost:3000).
 
+To test from another device on the same local network, open
+`http://<this-computer's-LAN-IP>:3000`. The development configuration
+automatically allows the computer's active non-loopback network addresses and
+hostname so the Next.js client bundle and hot-reload connection can hydrate on
+LAN clients. Restart the server after changing networks or receiving a new IP
+address, and allow Node.js through the Windows firewall when prompted.
+
 The browser sends only the submitted text and public source URL to the local Next.js backend. The interface does not accept picture uploads or user-supplied image captions/OCR because DeepSeek V4 is text-only in this workflow. The backend retrieves public URL content, derives the rewrite language from the primary article, and calls DeepSeek with the server-only secret key. The key is never included in browser source, browser requests, API error bodies, or application logs.
 
 ## Production build

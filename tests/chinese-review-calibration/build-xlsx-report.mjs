@@ -67,6 +67,8 @@ const RESULT_LABELS = Object.freeze({
   model_name: "Model name",
   test_timestamp: "Test timestamp",
   http_status: "HTTP status",
+  draft_sha256: "Draft SHA-256",
+  reviewer_sha256: "Reviewer SHA-256",
 });
 
 async function loadArtifactTool() {
@@ -221,6 +223,7 @@ export async function buildXlsxReport({
     H: 14, I: 14, J: 11, K: 10, L: 14, M: 14, N: 11, O: 12, P: 12,
     Q: 14, R: 13, S: 12, T: 12, U: 17, V: 14, W: 22, X: 18, Y: 10,
     Z: 12, AA: 13, AB: 24, AC: 44, AD: 10, AE: 16, AF: 22, AG: 23, AH: 11,
+    AI: 24, AJ: 24,
   }, Math.max(2, resultRows.length + 1));
   if (resultRows.length > 0) {
     const resultLastRow = resultRows.length + 1;
