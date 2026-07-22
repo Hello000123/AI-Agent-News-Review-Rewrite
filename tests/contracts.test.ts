@@ -10,6 +10,8 @@ import {
 } from "@/lib/server/config";
 import {
   MAX_DRAFT_CHARS,
+  MAX_REWRITE_HISTORY_ENTRIES,
+  MAX_REWRITE_INSTRUCTION_CHARS,
   calculateWeightedScore,
   editorialInputSchema,
   reviewApiResponseSchema,
@@ -147,12 +149,12 @@ describe("editorial input and review contracts", () => {
   });
 
   it("uses source and calibrated review as the automatic-language rewrite contract", () => {
-    expect(
-      rewriteRequestSchema.safeParse({
-        source,
-        review: highReview,
-      }).success,
-    ).toBe(true);
+    expect(rewriteRequestSchema.parse({ source, review: highReview })).toMatchObject({
+      source,
+      review: highReview,
+      history: [],
+      refinement: { lengthOption: null, instruction: "" },
+    });
     expect(
       rewriteRequestSchema.safeParse({
         source,
@@ -170,6 +172,108 @@ describe("editorial input and review contracts", () => {
       rewriteRequestSchema.safeParse({
         source,
         review: { ...highReview, overallScore: 101 },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts chronological rewrite history and normalizes refinement defaults", () => {
+    const parsed = rewriteRequestSchema.parse({
+      source,
+      review: highReview,
+      history: [
+        {
+          rewrittenText: "First rewritten version.",
+          instruction: "  Make the opening stronger.  ",
+        },
+        {
+          rewrittenText: "Current rewritten version.",
+          lengthOption: "concise",
+          instruction: "Reduce repetition.",
+        },
+      ],
+      refinement: {
+        lengthOption: "more_detailed",
+        instruction: "  Focus on the programme benefits.  ",
+      },
+    });
+
+    expect(parsed.history).toEqual([
+      {
+        rewrittenText: "First rewritten version.",
+        lengthOption: null,
+        instruction: "Make the opening stronger.",
+      },
+      {
+        rewrittenText: "Current rewritten version.",
+        lengthOption: "concise",
+        instruction: "Reduce repetition.",
+      },
+    ]);
+    expect(parsed.refinement).toEqual({
+      lengthOption: "more_detailed",
+      instruction: "Focus on the programme benefits.",
+    });
+  });
+
+  it("allows compacted older versions but always requires the current version text", () => {
+    expect(
+      rewriteRequestSchema.safeParse({
+        source,
+        review: highReview,
+        history: [
+          { lengthOption: "concise", instruction: "Keep the first instruction." },
+          {
+            rewrittenText: "Current rewritten version.",
+            lengthOption: null,
+            instruction: "Keep the second instruction.",
+          },
+        ],
+      }).success,
+    ).toBe(true);
+
+    expect(
+      rewriteRequestSchema.safeParse({
+        source,
+        review: highReview,
+        history: [
+          { rewrittenText: "Older rewritten version." },
+          { lengthOption: "more_detailed", instruction: "Missing current text." },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds rewrite history, instructions, and length options", () => {
+    const currentEntry = {
+      rewrittenText: "Current rewritten version.",
+      lengthOption: null,
+      instruction: "",
+    } as const;
+    expect(
+      rewriteRequestSchema.safeParse({
+        source,
+        review: highReview,
+        history: Array.from(
+          { length: MAX_REWRITE_HISTORY_ENTRIES + 1 },
+          (_value, index) => ({ ...currentEntry, rewrittenText: `Version ${index}.` }),
+        ),
+      }).success,
+    ).toBe(false);
+    expect(
+      rewriteRequestSchema.safeParse({
+        source,
+        review: highReview,
+        refinement: {
+          lengthOption: null,
+          instruction: "x".repeat(MAX_REWRITE_INSTRUCTION_CHARS + 1),
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      rewriteRequestSchema.safeParse({
+        source,
+        review: highReview,
+        refinement: { lengthOption: "both", instruction: "" },
       }).success,
     ).toBe(false);
   });

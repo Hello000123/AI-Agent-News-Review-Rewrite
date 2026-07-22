@@ -11,6 +11,8 @@ export async function POST(request: Request) {
     const result: RewriteApiResponse = await rewriteWithFeedback(
       input.source,
       input.review,
+      undefined,
+      { history: input.history, refinement: input.refinement },
     );
     return jsonResponse(result);
   } catch (error) {

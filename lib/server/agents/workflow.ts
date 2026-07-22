@@ -15,6 +15,7 @@ import {
   type EditorialInput,
   type ReviewApiResponse,
   type ReviewResult,
+  type RewriteContext,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
 
@@ -155,6 +156,10 @@ export async function rewriteWithFeedback(
   source: SourceSnapshot,
   review: ReviewResult,
   completionRunner?: CompletionRunner,
+  context: RewriteContext = {
+    history: [],
+    refinement: { lengthOption: null, instruction: "" },
+  },
 ) {
-  return runRewriteAgent(source, review, completionRunner);
+  return runRewriteAgent(source, review, completionRunner, context);
 }

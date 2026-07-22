@@ -169,6 +169,41 @@ function expectedResultForCase(id: string) {
         missingInformation: ["The responsible organisation, location and opening date are absent."],
         appliedScoreCap: 59,
       });
+    case "missing_time_context":
+      return makeReviewResult({
+        scores: { factualCompletenessScore: 80 },
+        findings: [
+          {
+            category: "factualCompleteness",
+            severity: "minor",
+            issue: "The programme launch timing is missing.",
+            evidence: "The copy says the programme will begin but does not say when.",
+            recommendation: "Add meaningful time context if it is available without inventing a date.",
+          },
+        ],
+        missingInformation: ["Meaningful timing for the programme launch is not provided."],
+        appliedScoreCap: 89,
+      });
+    case "contradictory_time_context":
+      return makeReviewResult({
+        scores: {
+          factualCompletenessScore: 45,
+          structureScore: 85,
+          clarityScore: 70,
+          professionalismScore: 80,
+        },
+        risks: { seriousFactualGaps: true },
+        findings: [
+          {
+            category: "factualCompleteness",
+            severity: "major",
+            issue: "The launch chronology is internally contradictory.",
+            evidence: "The copy says the programme launched last week and will launch next week.",
+            recommendation: "Resolve the conflicting launch timing without guessing which claim is correct.",
+          },
+        ],
+        appliedScoreCap: 59,
+      });
     case "unsupported_material_claims":
       return makeReviewResult({
         scores: {
@@ -217,7 +252,7 @@ function expectedResultForCase(id: string) {
 
 describe("review scoring evaluation set", () => {
   it("covers the requested quality, language, risk and live-URL cases", () => {
-    expect(reviewEvaluationCases).toHaveLength(10);
+    expect(reviewEvaluationCases).toHaveLength(18);
     expect(new Set(reviewEvaluationCases.map(({ id }) => id)).size).toBe(
       reviewEvaluationCases.length,
     );
@@ -235,6 +270,11 @@ describe("review scoring evaluation set", () => {
       "multiple_quotations",
       "chinese_punctuation",
       "live_url",
+      "relative_time",
+      "missing_time",
+      "contradictory_time",
+      "exact_date",
+      "time_not_required",
     ]) {
       expect(tags).toContain(tag);
     }
@@ -265,6 +305,34 @@ describe("review scoring evaluation set", () => {
       majorStructuralProblems: true,
     });
     expect(publisherControl?.inputKind).toBe("text_with_reference");
+
+    const timingCases = Object.fromEntries(
+      reviewEvaluationCases
+        .filter(({ tags: caseTags }) => caseTags.includes("time_context"))
+        .map((testCase) => [testCase.id, testCase]),
+    );
+    expect(Object.keys(timingCases).sort()).toEqual(
+      [
+        "contradictory_time_context",
+        "english_exact_calendar_date",
+        "english_relative_recently",
+        "english_relative_yesterday",
+        "missing_time_context",
+        "time_context_not_required",
+        "traditional_relative_recently",
+        "traditional_relative_yesterday",
+      ].sort(),
+    );
+    expect(timingCases.english_relative_yesterday.request.draft).toContain("yesterday");
+    expect(timingCases.english_relative_recently.request.draft).toContain("recently");
+    expect(timingCases.traditional_relative_yesterday.request.draft).toContain("昨天");
+    expect(timingCases.traditional_relative_recently.request.draft).toContain("近期");
+    expect(timingCases.english_exact_calendar_date.request.draft).toContain("22 July 2026");
+    expect(timingCases.missing_time_context.request.draft).not.toMatch(
+      /\b(?:yesterday|today|recently|week|morning|monday|july|2026)\b/iu,
+    );
+    expect(timingCases.contradictory_time_context.request.draft).toContain("last week");
+    expect(timingCases.contradictory_time_context.request.draft).toContain("next week");
   });
 
   it("keeps every request and constructed expected result inside current contracts", () => {
@@ -318,6 +386,33 @@ describe("review scoring evaluation set", () => {
     expect(evaluateReviewResult(unsupportedCase, unflagged).failures).toContain(
       "readinessRisks.unsupportedClaims must be true.",
     );
+  });
+
+  it("rejects exact-date-only warnings for valid time context and requires chronology feedback", () => {
+    const relativeCase = reviewEvaluationCases.find(
+      ({ id }) => id === "english_relative_yesterday",
+    )!;
+    const inappropriateDateWarning = makeReviewResult({
+      missingInformation: ["The exact date is missing from the announcement."],
+    });
+    expect(
+      evaluateReviewResult(relativeCase, inappropriateDateWarning).failures.some((failure) =>
+        failure.startsWith("Feedback matches forbidden pattern"),
+      ),
+    ).toBe(true);
+
+    const missingCase = reviewEvaluationCases.find(({ id }) => id === "missing_time_context")!;
+    const missingWithoutChronologyFeedback = {
+      ...expectedResultForCase(missingCase.id),
+      findings: [finding("factualCompleteness", "minor")],
+      missingInformation: [],
+      recommendations: ["Resolve the structured finding before publication."],
+    } satisfies ReviewResult;
+    expect(
+      evaluateReviewResult(missingCase, missingWithoutChronologyFeedback).failures.some((failure) =>
+        failure.startsWith("Feedback does not match required pattern"),
+      ),
+    ).toBe(true);
   });
 
   it("detects inconsistent weighted, capped and decision values", () => {

@@ -5,6 +5,8 @@ export const MAX_REFERENCE_CHARS = 50_000;
 export const MAX_REQUEST_BYTES = 220_000;
 export const MAX_SOURCE_URL_CHARS = 2_048;
 export const MAX_IMAGE_CONTEXT_ITEMS = 8;
+export const MAX_REWRITE_INSTRUCTION_CHARS = 4_000;
+export const MAX_REWRITE_HISTORY_ENTRIES = 24;
 
 export const REVIEW_SCORE_WEIGHTS = {
   factualCompletenessScore: 0.25,
@@ -171,8 +173,60 @@ export const sourceSnapshotSchema = z
   .strict();
 
 export const reviewRequestSchema = editorialInputSchema;
-export const rewriteRequestSchema = z
+
+export const rewriteLengthOptionSchema = z.enum(["concise", "more_detailed"]);
+
+export const rewriteInstructionSchema = z
+  .string()
+  .trim()
+  .max(
+    MAX_REWRITE_INSTRUCTION_CHARS,
+    `Improvement instructions are limited to ${MAX_REWRITE_INSTRUCTION_CHARS.toLocaleString("en-US")} characters.`,
+  );
+
+export const rewriteHistoryEntrySchema = z
   .object({
+    // Older rewritten text may be omitted when the client compacts a large
+    // request. Instructions and length preferences always remain in order.
+    rewrittenText: z.string().trim().min(1).max(MAX_REFERENCE_CHARS).optional(),
+    lengthOption: rewriteLengthOptionSchema.nullable().default(null),
+    instruction: rewriteInstructionSchema.default(""),
+  })
+  .strict();
+
+export const rewriteHistorySchema = z
+  .array(rewriteHistoryEntrySchema)
+  .max(MAX_REWRITE_HISTORY_ENTRIES)
+  .superRefine((history, context) => {
+    const lastIndex = history.length - 1;
+    if (lastIndex >= 0 && !history[lastIndex]?.rewrittenText) {
+      context.addIssue({
+        code: "custom",
+        path: [lastIndex, "rewrittenText"],
+        message: "The current rewritten version is required when rewrite history is provided.",
+      });
+    }
+  });
+
+export const rewriteRefinementSchema = z
+  .object({
+    lengthOption: rewriteLengthOptionSchema.nullable().default(null),
+    instruction: rewriteInstructionSchema.default(""),
+  })
+  .strict();
+
+export const rewriteContextSchema = z
+  .object({
+    history: rewriteHistorySchema.default([]),
+    refinement: rewriteRefinementSchema.default({
+      lengthOption: null,
+      instruction: "",
+    }),
+  })
+  .strict();
+
+export const rewriteRequestSchema = rewriteContextSchema
+  .extend({
     source: sourceSnapshotSchema,
     review: reviewResultSchema,
   })
@@ -250,6 +304,13 @@ export type ReviewFinding = z.infer<typeof reviewFindingSchema>;
 export type ReviewModelResponse = z.infer<typeof reviewModelResponseSchema>;
 export type ReviewResult = z.infer<typeof reviewResultSchema>;
 export type ReviewApiResponse = z.infer<typeof reviewApiResponseSchema>;
+export type RewriteLengthOption = z.infer<typeof rewriteLengthOptionSchema>;
+export type RewriteHistoryEntry = z.infer<typeof rewriteHistoryEntrySchema>;
+export type RewriteHistoryEntryInput = z.input<typeof rewriteHistoryEntrySchema>;
+export type RewriteRefinement = z.infer<typeof rewriteRefinementSchema>;
+export type RewriteRefinementInput = z.input<typeof rewriteRefinementSchema>;
+export type RewriteContext = z.infer<typeof rewriteContextSchema>;
+export type RewriteRequest = z.infer<typeof rewriteRequestSchema>;
 export type QuotationIssue = z.infer<typeof quotationIssueSchema>;
 export type RewriteApiResponse = z.infer<typeof rewriteApiResponseSchema>;
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;

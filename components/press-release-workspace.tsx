@@ -7,10 +7,18 @@ import { QuotationFailurePanel } from "@/components/quotation-failure-panel";
 import { ReviewSummary } from "@/components/review-summary";
 import { ApiRequestError, requestReview, requestRewrite } from "@/lib/client/api";
 import {
+  clearRewriteSession,
+  loadRewriteSession,
+  saveRewriteSession,
+  type CompletedRewriteTurn,
+} from "@/lib/client/rewrite-session";
+import {
   MAX_DRAFT_CHARS,
+  MAX_REWRITE_HISTORY_ENTRIES,
   type EditorialInput,
   type QuotationIssue,
   type ReviewResult,
+  type RewriteRefinement,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
 
@@ -43,6 +51,11 @@ interface VisibleError {
 interface PressReleaseWorkspaceProps {
   initialPassScore: number;
 }
+
+const EMPTY_REWRITE_REFINEMENT: RewriteRefinement = {
+  lengthOption: null,
+  instruction: "",
+};
 
 function countWords(text: string) {
   const normalized = text.trim();
@@ -83,6 +96,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   const [reviewedSource, setReviewedSource] = useState<SourceSnapshot | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
   const [rewriteState, setRewriteState] = useState<RewriteState>({ status: "idle" });
+  const [rewriteHistory, setRewriteHistory] = useState<CompletedRewriteTurn[]>([]);
   const [message, setMessage] = useState("");
   const [passScore, setPassScore] = useState(initialPassScore);
   const [processing, setProcessing] = useState<ProcessingState>("idle");
@@ -90,6 +104,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   const [requestError, setRequestError] = useState<VisibleError | null>(null);
   const [copied, setCopied] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const outputRef = useRef<HTMLTextAreaElement>(null);
@@ -98,6 +113,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   const inFlightRef = useRef(false);
   const requestSequenceRef = useRef(0);
   const activeRequestRef = useRef(0);
+  const lastRefinementRef = useRef<RewriteRefinement>(EMPTY_REWRITE_REFINEMENT);
   const busy = processing !== "idle";
   const words = countWords(draft);
 
@@ -110,6 +126,77 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     }, 1_000);
     return () => window.clearInterval(interval);
   }, [processing]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const stored = loadRewriteSession();
+      if (stored) {
+        const restoredInput = { draft: stored.draft, sourceUrl: stored.sourceUrl };
+        if (inputSignature(restoredInput) === stored.reviewedInputSignature) {
+          setDraft(stored.draft);
+          setSourceUrl(stored.sourceUrl);
+          setReviewedInputSignature(stored.reviewedInputSignature);
+          setReviewedSource(stored.reviewedSource);
+          setReview(stored.review);
+          setRewriteHistory(stored.history);
+          setMessage(stored.message);
+          setPassScore(stored.passScore);
+
+          const currentTurn = stored.history.at(-1);
+          if (currentTurn) {
+            setRewriteState({
+              status: "success",
+              attemptId: 0,
+              text: currentTurn.rewrittenText,
+              validation: { status: "passed", attempts: 1 },
+            });
+          }
+        } else {
+          clearRewriteSession();
+        }
+      }
+      setSessionHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !sessionHydrated ||
+      !review ||
+      !reviewedSource ||
+      !reviewedInputSignature ||
+      inputSignature({ draft, sourceUrl }) !== reviewedInputSignature
+    ) {
+      return;
+    }
+
+    saveRewriteSession({
+      version: 1,
+      draft,
+      sourceUrl,
+      reviewedInputSignature,
+      reviewedSource,
+      review,
+      message,
+      passScore,
+      history: rewriteHistory,
+    });
+  }, [
+    draft,
+    message,
+    passScore,
+    review,
+    reviewedInputSignature,
+    reviewedSource,
+    rewriteHistory,
+    sessionHydrated,
+    sourceUrl,
+  ]);
 
   function currentInput(): EditorialInput {
     return {
@@ -128,10 +215,13 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     setReviewedSource(null);
     setReview(null);
     setRewriteState({ status: "idle" });
+    setRewriteHistory([]);
     setMessage("");
     setPassScore(initialPassScore);
     setCopied(false);
     setRequestError(null);
+    lastRefinementRef.current = EMPTY_REWRITE_REFINEMENT;
+    clearRewriteSession();
   }
 
   function focusInput() {
@@ -150,7 +240,10 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     setRequestError(null);
     setInputError("");
     setRewriteState({ status: "idle" });
+    setRewriteHistory([]);
     setCopied(false);
+    lastRefinementRef.current = EMPTY_REWRITE_REFINEMENT;
+    clearRewriteSession();
   }
 
   function validateInput(input: EditorialInput) {
@@ -185,6 +278,9 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     setReviewedSource(null);
     setReviewedInputSignature("");
     setRewriteState({ status: "idle" });
+    setRewriteHistory([]);
+    lastRefinementRef.current = EMPTY_REWRITE_REFINEMENT;
+    clearRewriteSession();
     setElapsedSeconds(0);
     setProcessing("reviewing");
 
@@ -215,8 +311,23 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     }
   }
 
-  async function handleRewrite() {
+  async function handleRewrite(refinement: RewriteRefinement) {
     if (inFlightRef.current || !review || !reviewedSource || reviewIsStale) return;
+    if (rewriteHistory.length >= MAX_REWRITE_HISTORY_ENTRIES) {
+      showRequestError({
+        message:
+          `This article session has reached its ${MAX_REWRITE_HISTORY_ENTRIES}-rewrite context limit. Start a new draft to begin a fresh session.`,
+        retryable: false,
+        context: "rewrite",
+      });
+      return;
+    }
+
+    const submittedRefinement: RewriteRefinement = {
+      lengthOption: refinement.lengthOption ?? null,
+      instruction: refinement.instruction.trim(),
+    };
+    lastRefinementRef.current = submittedRefinement;
 
     const requestId = ++requestSequenceRef.current;
     activeRequestRef.current = requestId;
@@ -228,8 +339,21 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     setProcessing("rewriting");
 
     try {
-      const result = await requestRewrite(reviewedSource, review);
+      const result = await requestRewrite(
+        reviewedSource,
+        review,
+        rewriteHistory,
+        submittedRefinement,
+      );
       if (activeRequestRef.current !== requestId) return;
+      setRewriteHistory((history) => [
+        ...history,
+        {
+          rewrittenText: result.finalText,
+          lengthOption: submittedRefinement.lengthOption,
+          instruction: submittedRefinement.instruction,
+        },
+      ]);
       setRewriteState({
         status: "success",
         attemptId: requestId,
@@ -266,6 +390,14 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
         setProcessing("idle");
       }
     }
+  }
+
+  function handleInitialRewrite() {
+    return handleRewrite(EMPTY_REWRITE_REFINEMENT);
+  }
+
+  function handleRetryRewrite() {
+    return handleRewrite(lastRefinementRef.current);
   }
 
   async function handleCopy() {
@@ -437,7 +569,12 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
               </dl>
             ) : null}
             {requestError.retryable && requestError.context === "rewrite" ? (
-              <button className="button button-secondary" type="button" onClick={handleRewrite} disabled={busy}>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={handleRetryRewrite}
+                disabled={busy}
+              >
                 Retry Rewrite
               </button>
             ) : null}
@@ -459,7 +596,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
             message={message}
             busy={busy}
             reviewIsStale={reviewIsStale}
-            onRewrite={handleRewrite}
+            onRewrite={handleInitialRewrite}
             onEditDraft={focusInput}
           />
           {rewriteState.status === "quotation-failed" ? (
@@ -468,7 +605,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
               candidateText={rewriteState.candidateText}
               attempts={rewriteState.attempts}
               busy={busy}
-              onRetry={handleRewrite}
+              onRetry={handleRetryRewrite}
             />
           ) : null}
           {rewriteState.status === "success" ? (

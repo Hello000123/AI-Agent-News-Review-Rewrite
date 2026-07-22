@@ -4,9 +4,9 @@ PressReady is a focused local website for one workflow:
 
     Text or public URL → Review Agent → Calibrated score and feedback → Explicit rewrite → Validated news report
 
-The Review Agent scores the submitted copy once and returns a structured assessment. Rewriting never starts automatically and is never skipped because a review score is high: after either a high or low score, the user can explicitly request a Rewrite Agent call or return to the source input. The rewrite uses the immutable source snapshot that produced the displayed review.
+The Review Agent scores the submitted copy once and returns a structured assessment. Rewriting never starts automatically and is never skipped because a review score is high: after either a high or low score, the user can explicitly request a Rewrite Agent call or return to the source input. The rewrite uses the immutable source snapshot that produced the displayed review. After the first rewrite, `Rewrite with AI Again` opens optional concise/more-detailed controls and an improvement-instructions field before another request is made.
 
-The project is intentionally limited to this workflow. It has no login, database, user history, news search, dark theme, publishing, distribution, or scheduled work. Rewrites automatically preserve the primary input language and Chinese script: English input stays English, while Traditional or Simplified Chinese input stays in the detected Chinese script.
+The project is intentionally limited to this workflow. It has no login, database, account-level history, news search, dark theme, publishing, distribution, or scheduled work. The active article and its successful rewrite turns are retained in tab-scoped `sessionStorage` so a same-tab reload can continue the current editing session; starting a new draft or changing the source clears that history. Rewrites automatically preserve the primary input language and Chinese script: English input stays English, while Traditional or Simplified Chinese input stays in the detected Chinese script.
 
 ## Technology stack
 
@@ -164,6 +164,8 @@ The Review Agent:
 - scores the exact submitted copy across the six fixed categories and published readiness bands;
 - treats retrieved article and page context as separately labelled evidence rather than transferring a publisher's reputation or reference prose quality to a user draft;
 - applies equivalent standards across languages and ignores publisher reputation;
+- accepts meaningful relative time expressions such as `yesterday`, `recently`, `昨天`, and `近期` as valid time information; it does not require an exact calendar date or penalize timeless copy when chronology is immaterial;
+- deducts for time only when material context is absent, unclear, internally contradictory, or too vague to understand, and never invents an exact date from relative wording;
 - treats media contacts, boilerplates, executive quotations, formal datelines, and calls to action as optional unless essential to the specific announcement;
 - returns a required rationale for every category score, explicit readiness-risk flags, structured category/severity findings, strengths, missing information, and recommendations;
 - uses temperature 0 for the most repeatable scoring the configured provider can offer;
@@ -171,8 +173,10 @@ The Review Agent:
 
 The Rewrite Agent:
 
-- receives the immutable primary source, relevant retrieved page context, validated review feedback, and an automatically derived source-language requirement;
+- receives the immutable primary source, relevant retrieved page context, validated review feedback, an automatically derived source-language requirement, the current rewrite, retained earlier turns, all prior user instructions, and the latest optional refinement;
 - treats source material as factual input and review feedback only as editing guidance;
+- keeps compatible earlier improvement instructions active, gives a later conflicting instruction precedence, and applies only the latest selected length preference;
+- makes `concise` output shorter and more direct without losing important facts; makes `more_detailed` output fuller only from explicit source or user-supplied information and never fabricates detail merely to add length;
 - creates a concise factual headline, strong lead, inverted-pyramid structure, short paragraphs, and neutral newsroom language;
 - preserves material supported facts, exact direct quotations, names, dates, numbers, attribution, uncertainty, language, and script;
 - never invents facts, translations, context, causal links, quotations, or placeholders;
@@ -183,6 +187,14 @@ The Rewrite Agent:
 - returns only a headline, one blank line, and the news-report body after validation.
 
 User drafts, retrieved source material, and feedback are wrapped as JSON data in the prompts and explicitly treated as untrusted content. Generated output is rendered as plain textarea text; HTML is never injected.
+
+### Rewrite-session memory
+
+Each validated rewrite is appended chronologically as `{ rewrittenText, lengthOption, instruction }`. On the next request, the last turn is labelled as the current rewritten version and earlier turns remain ordered, so later instructions build on the same article instead of starting an independent model call. The server remains stateless: the browser sends this context with each rewrite request.
+
+The stable current article state is stored under one versioned `sessionStorage` key. This survives same-tab refreshes and same-tab navigation, but not the end of the browser-tab session. Editing the source, submitting a new review, or choosing `Start New Draft` clears it. Malformed stored data and storage failures are ignored safely.
+
+Rewrite requests retain up to 24 successful turns. If a request approaches the 220 KB body limit, older rewritten version bodies are omitted from the request from oldest to newest while their instructions and preferences remain; the original source, active system rules, all retained user instructions, and the newest/current rewrite take priority.
 
 ## Quotation preservation and retry behavior
 
@@ -302,7 +314,7 @@ The news-editor prompt uses only shared, high-level principles—accuracy, conci
 - Review requests accept a draft, a public source URL, or both; picture upload and user-supplied image-text fields are rejected.
 - Public page retrieval defaults to an 8-second timeout, three redirects, and 1.5 MB of response bytes before bounded text extraction.
 - API request bodies are limited to 220,000 bytes.
-- The application does not persist drafts, results, or user history.
+- The active article, review, and successful rewrite turns are stored only in tab-scoped browser `sessionStorage`; there is no server database or account-level history. Source changes and `Start New Draft` clear the stored session.
 - Submitted copy and retrieved text are sent to DeepSeek for processing and are therefore subject to DeepSeek account terms and data handling.
 
 ## Troubleshooting

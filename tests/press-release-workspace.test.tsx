@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PressReleaseWorkspace } from "@/components/press-release-workspace";
 import { ApiRequestError, requestReview, requestRewrite } from "@/lib/client/api";
+import { REWRITE_SESSION_STORAGE_KEY } from "@/lib/client/rewrite-session";
 import type {
   ReviewApiResponse,
   RewriteApiResponse,
+  RewriteLengthOption,
   SourceSnapshot,
 } from "@/lib/shared/contracts";
 import { highReview, lowReview } from "@/tests/fixtures/reviews";
@@ -52,8 +54,40 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+type TestUser = ReturnType<typeof userEvent.setup>;
+
+async function submitReview(user: TestUser, text: string) {
+  await user.type(screen.getByRole("textbox", { name: /News draft/u }), text);
+  await user.click(screen.getByRole("button", { name: "Review Draft" }));
+  await screen.findByText("Score rationale");
+}
+
+async function openRefinement(user: TestUser) {
+  await user.click(screen.getByRole("button", { name: "Rewrite with AI Again" }));
+  return screen.findByRole("heading", { name: "Refine the next rewrite" });
+}
+
+async function submitRefinement(
+  user: TestUser,
+  options: { lengthOption?: RewriteLengthOption; instruction?: string } = {},
+) {
+  await openRefinement(user);
+  if (options.lengthOption) {
+    await user.click(
+      screen.getByRole("button", {
+        name: options.lengthOption === "concise" ? "Concise" : "More detailed",
+      }),
+    );
+  }
+  if (options.instruction) {
+    await user.type(screen.getByLabelText(/Improvement instructions/u), options.instruction);
+  }
+  await user.click(screen.getByRole("button", { name: "Rewrite Again" }));
+}
+
 describe("score-first workspace", () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: vi.fn(),
@@ -133,7 +167,302 @@ describe("score-first workspace", () => {
 
     expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
       .toBe("Accurate headline\n\nA publication-quality news report.");
-    expect(rewriteMock).toHaveBeenCalledWith(reviewedSource, highReview);
+    expect(rewriteMock).toHaveBeenCalledWith(
+      reviewedSource,
+      highReview,
+      [],
+      { lengthOption: null, instruction: "" },
+    );
+  });
+
+  it("opens optional refinement controls without rewriting and submits no preference or comment", async () => {
+    const reviewedSource = sourceFor("Optional refinement facts.");
+    const firstText = "First headline\n\nFirst rewritten report.";
+    const secondText = "Second headline\n\nSecond rewritten report.";
+    reviewMock.mockResolvedValue({
+      ...reviewResponse(highReview, reviewedSource.primaryText),
+      source: reviewedSource,
+    });
+    rewriteMock
+      .mockResolvedValueOnce(rewriteResponse(firstText))
+      .mockResolvedValueOnce(rewriteResponse(secondText));
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+
+    await submitReview(user, reviewedSource.primaryText);
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
+      .toBe(firstText);
+
+    await openRefinement(user);
+    expect(rewriteMock).toHaveBeenCalledOnce();
+    expect((screen.getByLabelText("Final news report text") as HTMLTextAreaElement).value)
+      .toBe(firstText);
+    expect(screen.getByText("Length options are optional. Choose one or leave both unselected."))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Concise" }).getAttribute("aria-pressed"))
+      .toBe("false");
+    expect(screen.getByRole("button", { name: "More detailed" }).getAttribute("aria-pressed"))
+      .toBe("false");
+    expect((screen.getByLabelText(/Improvement instructions/u) as HTMLTextAreaElement).value)
+      .toBe("");
+
+    await user.click(screen.getByRole("button", { name: "Rewrite Again" }));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Final news report text") as HTMLTextAreaElement).value)
+        .toBe(secondText),
+    );
+    expect(rewriteMock).toHaveBeenNthCalledWith(
+      2,
+      reviewedSource,
+      highReview,
+      [{ rewrittenText: firstText, lengthOption: null, instruction: "" }],
+      { lengthOption: null, instruction: "" },
+    );
+  });
+
+  it("keeps length options mutually exclusive and lets the user deselect the active option", async () => {
+    reviewMock.mockResolvedValue(reviewResponse(highReview, "Toggle refinement facts."));
+    rewriteMock.mockResolvedValue(rewriteResponse("Toggle headline\n\nToggle report."));
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+
+    await submitReview(user, "Toggle refinement facts.");
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    await screen.findByLabelText("Final news report text");
+    await openRefinement(user);
+
+    const concise = screen.getByRole("button", { name: "Concise" });
+    const detailed = screen.getByRole("button", { name: "More detailed" });
+    await user.click(concise);
+    expect(concise.getAttribute("aria-pressed")).toBe("true");
+    expect(detailed.getAttribute("aria-pressed")).toBe("false");
+
+    await user.click(detailed);
+    expect(concise.getAttribute("aria-pressed")).toBe("false");
+    expect(detailed.getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(detailed);
+    expect(concise.getAttribute("aria-pressed")).toBe("false");
+    expect(detailed.getAttribute("aria-pressed")).toBe("false");
+    expect(rewriteMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["Concise", "concise", "", "concise"],
+    ["More detailed", "more_detailed", "", "more_detailed"],
+    ["instruction only", undefined, "Use a more formal tone.", null],
+    ["length and instruction", "concise", "Reduce repeated information.", "concise"],
+  ] as const)(
+    "submits %s refinement",
+    async (_label, selectedOption, instruction, expectedOption) => {
+      const reviewedSource = sourceFor("Parameterized refinement facts.");
+      const firstText = "Baseline headline\n\nBaseline rewritten report.";
+      const nextText = "Refined headline\n\nRefined rewritten report.";
+      reviewMock.mockResolvedValue({
+        ...reviewResponse(highReview, reviewedSource.primaryText),
+        source: reviewedSource,
+      });
+      rewriteMock
+        .mockResolvedValueOnce(rewriteResponse(firstText))
+        .mockResolvedValueOnce(rewriteResponse(nextText));
+      const user = userEvent.setup();
+      render(<PressReleaseWorkspace initialPassScore={80} />);
+
+      await submitReview(user, reviewedSource.primaryText);
+      await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+      await screen.findByLabelText("Final news report text");
+      await submitRefinement(user, {
+        lengthOption: selectedOption,
+        instruction: instruction || undefined,
+      });
+      await waitFor(() =>
+        expect((screen.getByLabelText("Final news report text") as HTMLTextAreaElement).value)
+          .toBe(nextText),
+      );
+
+      expect(rewriteMock).toHaveBeenNthCalledWith(
+        2,
+        reviewedSource,
+        highReview,
+        [{ rewrittenText: firstText, lengthOption: null, instruction: "" }],
+        { lengthOption: expectedOption, instruction },
+      );
+    },
+  );
+
+  it("preserves ordered versions and instructions across three rewrites while applying the latest preference", async () => {
+    const reviewedSource = sourceFor("Conversation memory facts.");
+    const versions = [
+      "Version one headline\n\nVersion one report.",
+      "Version two headline\n\nVersion two report.",
+      "Version three headline\n\nVersion three report.",
+    ];
+    reviewMock.mockResolvedValue({
+      ...reviewResponse(highReview, reviewedSource.primaryText),
+      source: reviewedSource,
+    });
+    rewriteMock
+      .mockResolvedValueOnce(rewriteResponse(versions[0]))
+      .mockResolvedValueOnce(rewriteResponse(versions[1]))
+      .mockResolvedValueOnce(rewriteResponse(versions[2]));
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+
+    await submitReview(user, reviewedSource.primaryText);
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    await screen.findByLabelText("Final news report text");
+    await submitRefinement(user, {
+      lengthOption: "concise",
+      instruction: "Make the opening more engaging.",
+    });
+    await waitFor(() =>
+      expect((screen.getByLabelText("Final news report text") as HTMLTextAreaElement).value)
+        .toBe(versions[1]),
+    );
+    await submitRefinement(user, {
+      lengthOption: "more_detailed",
+      instruction: "Move the quotation to the second paragraph.",
+    });
+    await waitFor(() =>
+      expect((screen.getByLabelText("Final news report text") as HTMLTextAreaElement).value)
+        .toBe(versions[2]),
+    );
+
+    expect(rewriteMock).toHaveBeenNthCalledWith(
+      3,
+      reviewedSource,
+      highReview,
+      [
+        { rewrittenText: versions[0], lengthOption: null, instruction: "" },
+        {
+          rewrittenText: versions[1],
+          lengthOption: "concise",
+          instruction: "Make the opening more engaging.",
+        },
+      ],
+      {
+        lengthOption: "more_detailed",
+        instruction: "Move the quotation to the second paragraph.",
+      },
+    );
+  });
+
+  it("cancels refinement without rewriting and resets the optional controls", async () => {
+    reviewMock.mockResolvedValue(reviewResponse(highReview, "Cancel refinement facts."));
+    rewriteMock.mockResolvedValue(rewriteResponse("Current headline\n\nCurrent report."));
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+
+    await submitReview(user, "Cancel refinement facts.");
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    await screen.findByLabelText("Final news report text");
+    await openRefinement(user);
+    await user.click(screen.getByRole("button", { name: "Concise" }));
+    await user.type(screen.getByLabelText(/Improvement instructions/u), "Discard this request.");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("heading", { name: "Refine the next rewrite" })).toBeNull();
+    expect(screen.getByLabelText("Final news report text")).toBeTruthy();
+    expect(rewriteMock).toHaveBeenCalledOnce();
+
+    await openRefinement(user);
+    expect(screen.getByRole("button", { name: "Concise" }).getAttribute("aria-pressed"))
+      .toBe("false");
+    expect((screen.getByLabelText(/Improvement instructions/u) as HTMLTextAreaElement).value)
+      .toBe("");
+  });
+
+  it("starts a new article with empty rewrite history", async () => {
+    const firstSource = sourceFor("First article facts.");
+    const secondSource = sourceFor("Second article facts.");
+    reviewMock
+      .mockResolvedValueOnce({ ...reviewResponse(highReview, firstSource.primaryText), source: firstSource })
+      .mockResolvedValueOnce({ ...reviewResponse(highReview, secondSource.primaryText), source: secondSource });
+    rewriteMock
+      .mockResolvedValueOnce(rewriteResponse("First article headline\n\nFirst article report."))
+      .mockResolvedValueOnce(rewriteResponse("Second article headline\n\nSecond article report."));
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+
+    await submitReview(user, firstSource.primaryText);
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    await screen.findByLabelText("Final news report text");
+    await waitFor(() => expect(window.sessionStorage.getItem(REWRITE_SESSION_STORAGE_KEY)).toBeTruthy());
+
+    await user.click(screen.getByRole("button", { name: "Start New Draft" }));
+    expect((screen.getByRole("textbox", { name: /News draft/u }) as HTMLTextAreaElement).value)
+      .toBe("");
+    expect(window.sessionStorage.getItem(REWRITE_SESSION_STORAGE_KEY)).toBeNull();
+
+    await submitReview(user, secondSource.primaryText);
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    await screen.findByLabelText("Final news report text");
+    expect(rewriteMock).toHaveBeenNthCalledWith(
+      2,
+      secondSource,
+      highReview,
+      [],
+      { lengthOption: null, instruction: "" },
+    );
+  });
+
+  it("restores the article and complete rewrite history after an unmount and remount", async () => {
+    const reviewedSource = sourceFor("Restored article facts.");
+    const firstText = "Restored version one\n\nFirst restored report.";
+    const secondText = "Restored version two\n\nSecond restored report.";
+    const thirdText = "Restored version three\n\nThird restored report.";
+    reviewMock.mockResolvedValue({
+      ...reviewResponse(highReview, reviewedSource.primaryText),
+      source: reviewedSource,
+    });
+    rewriteMock
+      .mockResolvedValueOnce(rewriteResponse(firstText))
+      .mockResolvedValueOnce(rewriteResponse(secondText))
+      .mockResolvedValueOnce(rewriteResponse(thirdText));
+    const user = userEvent.setup();
+    const firstRender = render(<PressReleaseWorkspace initialPassScore={80} />);
+
+    await submitReview(user, reviewedSource.primaryText);
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    await screen.findByLabelText("Final news report text");
+    await submitRefinement(user, {
+      lengthOption: "concise",
+      instruction: "Keep the original opening instruction.",
+    });
+    await waitFor(() => {
+      const stored = JSON.parse(
+        window.sessionStorage.getItem(REWRITE_SESSION_STORAGE_KEY) ?? "null",
+      ) as { history?: unknown[] } | null;
+      expect(stored?.history).toHaveLength(2);
+    });
+
+    firstRender.unmount();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+    expect((await screen.findByRole("textbox", { name: /News draft/u }) as HTMLTextAreaElement).value)
+      .toBe(reviewedSource.primaryText);
+    expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
+      .toBe(secondText);
+
+    await submitRefinement(user, { instruction: "Retain that instruction after refresh." });
+    await waitFor(() =>
+      expect((screen.getByLabelText("Final news report text") as HTMLTextAreaElement).value)
+        .toBe(thirdText),
+    );
+    expect(rewriteMock).toHaveBeenNthCalledWith(
+      3,
+      reviewedSource,
+      highReview,
+      [
+        { rewrittenText: firstText, lengthOption: null, instruction: "" },
+        {
+          rewrittenText: secondText,
+          lengthOption: "concise",
+          instruction: "Keep the original opening instruction.",
+        },
+      ],
+      { lengthOption: null, instruction: "Retain that instruction after refresh." },
+    );
   });
 
   it("marks a changed review stale but restores it when the exact input is restored", async () => {
@@ -176,7 +505,10 @@ describe("score-first workspace", () => {
     await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
     await screen.findByLabelText("Final news report text");
 
-    await user.click(screen.getByRole("button", { name: "Rewrite with AI again" }));
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI Again" }));
+    expect(screen.getByLabelText("Final news report text")).toBeTruthy();
+    expect(rewriteMock).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Rewrite Again" }));
     expect(screen.queryByLabelText("Final news report text")).toBeNull();
     await act(async () => laterRewrite.reject(new ApiRequestError("DEEPSEEK_TIMEOUT", "Timed out.")));
     expect(await screen.findByText("Timed out.")).toBeTruthy();
@@ -265,7 +597,9 @@ describe("score-first workspace", () => {
     expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
       .toBe("First headline\n\nFirst validated body.");
 
-    await user.click(screen.getByRole("button", { name: "Rewrite with AI again" }));
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI Again" }));
+    expect(rewriteMock).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Rewrite Again" }));
     expect(await screen.findByText("Paragraph 1: Quoted wording was modified")).toBeTruthy();
     expect(screen.queryByLabelText("Final news report text")).toBeNull();
     expect((screen.getByLabelText(/Generated draft/u) as HTMLTextAreaElement).value)

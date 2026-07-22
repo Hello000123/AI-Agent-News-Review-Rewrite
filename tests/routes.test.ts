@@ -210,6 +210,43 @@ describe("review and rewrite API routes", () => {
     expect(userPrompt).toContain('"sourceUrl": "https://news.example/reference"');
   });
 
+  it("forwards refinement history and the latest length preference to the Rewrite Agent", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    const finalText =
+      "Supported update refined\n\nOfficials presented the supported update in a more formal report.";
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse(finalText));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await rewriteRoute(
+      request(
+        "/api/rewrite",
+        JSON.stringify({
+          source: rewriteSource,
+          review: highReview,
+          history: [
+            {
+              rewrittenText:
+                "Earlier supported update\n\nOfficials confirmed the supported update.",
+              lengthOption: "concise",
+              instruction: "Make the opening more engaging.",
+            },
+          ],
+          refinement: {
+            lengthOption: "more_detailed",
+            instruction: "Use a more formal tone.",
+          },
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    const userPrompt = providerUserPrompt(fetchMock);
+    expect(userPrompt).toContain("Earlier supported update");
+    expect(userPrompt).toContain("Make the opening more engaging.");
+    expect(userPrompt).toContain('"lengthOption": "more_detailed"');
+    expect(userPrompt).toContain("Use a more formal tone.");
+  });
+
   it.each([
     {
       language: "English",

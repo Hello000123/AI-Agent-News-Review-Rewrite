@@ -1,4 +1,12 @@
-import type { RefObject } from "react";
+"use client";
+
+import { useState, type FormEvent, type RefObject } from "react";
+
+import {
+  MAX_REWRITE_INSTRUCTION_CHARS,
+  type RewriteLengthOption,
+  type RewriteRefinement,
+} from "@/lib/shared/contracts";
 
 interface OutputPanelProps {
   output: string;
@@ -6,7 +14,7 @@ interface OutputPanelProps {
   copied: boolean;
   outputRef: RefObject<HTMLTextAreaElement | null>;
   onCopy: () => void;
-  onRewriteAgain: () => void;
+  onRewriteAgain: (refinement: RewriteRefinement) => void;
   onEditInput: () => void;
   onStartNew: () => void;
 }
@@ -21,6 +29,25 @@ export function OutputPanel({
   onEditInput,
   onStartNew,
 }: OutputPanelProps) {
+  const [showRefinement, setShowRefinement] = useState(false);
+  const [lengthOption, setLengthOption] = useState<RewriteLengthOption | null>(null);
+  const [instruction, setInstruction] = useState("");
+
+  function toggleLengthOption(option: RewriteLengthOption) {
+    setLengthOption((current) => (current === option ? null : option));
+  }
+
+  function closeRefinement() {
+    setShowRefinement(false);
+    setLengthOption(null);
+    setInstruction("");
+  }
+
+  function submitRefinement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onRewriteAgain({ lengthOption, instruction: instruction.trim() });
+  }
+
   return (
     <section className="card output-card" aria-labelledby="output-title">
       <div className="output-heading-row">
@@ -57,10 +84,12 @@ export function OutputPanel({
         <button
           className="button button-secondary"
           type="button"
-          onClick={onRewriteAgain}
-          disabled={busy}
+          onClick={() => setShowRefinement(true)}
+          disabled={busy || showRefinement}
+          aria-expanded={showRefinement}
+          aria-controls="rewrite-refinement-controls"
         >
-          Rewrite with AI again
+          Rewrite with AI Again
         </button>
         <button className="button button-quiet" type="button" onClick={onEditInput} disabled={busy}>
           Edit draft myself
@@ -69,6 +98,75 @@ export function OutputPanel({
           Start New Draft
         </button>
       </div>
+      {showRefinement ? (
+        <form
+          id="rewrite-refinement-controls"
+          className="rewrite-refinement"
+          onSubmit={submitRefinement}
+        >
+          <div className="refinement-heading">
+            <div>
+              <h3>Refine the next rewrite</h3>
+              <p>Length options are optional. Choose one or leave both unselected.</p>
+            </div>
+          </div>
+
+          <span className="input-label" id="rewrite-length-label">
+            Length and detail <span className="optional-label">(optional)</span>
+          </span>
+          <div
+            className="length-option-group"
+            role="group"
+            aria-labelledby="rewrite-length-label"
+          >
+            <button
+              className="length-option"
+              type="button"
+              aria-pressed={lengthOption === "concise"}
+              onClick={() => toggleLengthOption("concise")}
+              disabled={busy}
+            >
+              Concise
+            </button>
+            <button
+              className="length-option"
+              type="button"
+              aria-pressed={lengthOption === "more_detailed"}
+              onClick={() => toggleLengthOption("more_detailed")}
+              disabled={busy}
+            >
+              More detailed
+            </button>
+          </div>
+
+          <label className="input-label" htmlFor="rewrite-instructions">
+            Improvement instructions <span className="optional-label">(optional)</span>
+          </label>
+          <textarea
+            id="rewrite-instructions"
+            className="refinement-instructions"
+            value={instruction}
+            onChange={(event) => setInstruction(event.target.value)}
+            placeholder="Describe how you want the article improved"
+            maxLength={MAX_REWRITE_INSTRUCTION_CHARS}
+            disabled={busy}
+          />
+
+          <div className="refinement-actions">
+            <button className="button button-primary" type="submit" disabled={busy}>
+              Rewrite Again
+            </button>
+            <button
+              className="button button-quiet"
+              type="button"
+              onClick={closeRefinement}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : null}
       <p className="copy-status" role="status" aria-live="polite">
         {copied ? "The final news report was copied to your clipboard." : ""}
       </p>

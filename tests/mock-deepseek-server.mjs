@@ -194,6 +194,14 @@ const server = createServer((request, response) => {
       return;
     }
     const originalDraft = String(payload.source?.primaryText ?? "").trim();
+    const currentRewrite = String(
+      payload.rewriteSession?.currentTurn?.rewrittenText ?? "",
+    ).trim();
+    const editingBaseline = currentRewrite || originalDraft;
+    const lengthOption = payload.rewriteSession?.currentRefinement?.lengthOption ?? null;
+    const instruction = String(
+      payload.rewriteSession?.currentRefinement?.instruction ?? "",
+    ).trim();
     const requiredLanguage = String(payload.requiredOutputLanguage ?? "");
     const headline = requiredLanguage.startsWith("Traditional Chinese")
       ? "經審閱整理的新聞報道"
@@ -201,11 +209,29 @@ const server = createServer((request, response) => {
         ? "经审阅整理的新闻报道"
         : "News report based on the reviewed draft";
     const bodyPrefix = requiredLanguage.startsWith("Traditional Chinese")
-      ? "經編輯報道："
+      ? lengthOption === "concise"
+        ? "精簡編輯："
+        : lengthOption === "more_detailed"
+          ? "按已有資料詳述："
+          : instruction
+            ? "按意見再編輯："
+            : "經編輯報道："
       : requiredLanguage.startsWith("Simplified Chinese")
-        ? "经编辑报道："
-        : "Edited news report: ";
-    const rewrittenReport = [headline, "", bodyPrefix + originalDraft].join("\n");
+        ? lengthOption === "concise"
+          ? "精简编辑："
+          : lengthOption === "more_detailed"
+            ? "按已有资料详述："
+            : instruction
+              ? "按意见再编辑："
+              : "经编辑报道："
+        : lengthOption === "concise"
+          ? "Concise edit: "
+          : lengthOption === "more_detailed"
+            ? "More detailed edit using supplied facts: "
+            : instruction
+              ? "Edited to follow the supplied instruction: "
+              : "Edited news report: ";
+    const rewrittenReport = [headline, "", bodyPrefix + editingBaseline].join("\n");
     sendJson(response, 200, completion(rewrittenReport));
   });
 });

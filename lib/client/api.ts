@@ -1,12 +1,39 @@
 import {
+  MAX_REQUEST_BYTES,
   apiErrorResponseSchema,
   reviewApiResponseSchema,
   rewriteApiResponseSchema,
+  rewriteRequestSchema,
   type EditorialInput,
   type QuotationIssue,
   type ReviewResult,
+  type RewriteHistoryEntryInput,
+  type RewriteRefinementInput,
+  type RewriteRequest,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
+
+export const REWRITE_REQUEST_SAFE_BYTES = MAX_REQUEST_BYTES - 8_192;
+
+function jsonByteLength(value: unknown) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function compactRewriteRequest(payload: RewriteRequest): RewriteRequest {
+  if (jsonByteLength(payload) <= REWRITE_REQUEST_SAFE_BYTES || payload.history.length < 2) {
+    return payload;
+  }
+
+  const history = payload.history.map((entry) => ({ ...entry }));
+  // History is chronological. Remove only older version bodies, oldest first;
+  // every instruction/preference and the newest current version remain intact.
+  for (let index = 0; index < history.length - 1; index += 1) {
+    if (jsonByteLength({ ...payload, history }) <= REWRITE_REQUEST_SAFE_BYTES) break;
+    delete history[index].rewrittenText;
+  }
+
+  return { ...payload, history };
+}
 
 export class ApiRequestError extends Error {
   constructor(
@@ -142,8 +169,13 @@ export async function requestReview(input: EditorialInput | string) {
 export async function requestRewrite(
   source: SourceSnapshot,
   review: ReviewResult,
+  history: readonly RewriteHistoryEntryInput[] = [],
+  refinement: RewriteRefinementInput = {},
 ) {
-  const responseBody = await postJson("/api/rewrite", { source, review });
+  const payload = compactRewriteRequest(
+    rewriteRequestSchema.parse({ source, review, history, refinement }),
+  );
+  const responseBody = await postJson("/api/rewrite", payload);
   const parsed = rewriteApiResponseSchema.safeParse(responseBody);
   if (!parsed.success) {
     throw new ApiRequestError(

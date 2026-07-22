@@ -42,6 +42,8 @@ export interface ReviewEvaluationExpectations {
   readonly requireNoScoreCap?: boolean;
   readonly maximumAppliedScoreCap?: number;
   readonly minimumFindings?: number;
+  readonly requiredFeedbackPatterns?: readonly RegExp[];
+  readonly forbiddenFeedbackPatterns?: readonly RegExp[];
 }
 
 export interface ReviewEvaluationCase {
@@ -112,8 +114,38 @@ const highQualityExpectations = {
   requiredRisks: noReadinessRisks,
 } as const satisfies ReviewEvaluationExpectations;
 
+const relativeTimeWarningPatterns = [
+  /\b(?:exact|specific|calendar|precise|announcement|publication|release)\s+date\b/iu,
+  /\b(?:date|time|timing)\b.{0,80}\b(?:absent|missing|unclear|unknown|unspecified|not (?:given|provided|stated|identified))\b/iu,
+  /\b(?:lack|lacks|lacking|without|no)\b.{0,60}\b(?:date|time|timing|temporal context)\b/iu,
+  /\b(?:add|include|provide|specify|state|identify|verify)\b.{0,80}\b(?:date|time|timing)\b/iu,
+  /\bdoes not (?:identify|state|say|indicate|specify)\b.{0,80}\bwhen\b/iu,
+  /\bwhen\b.{0,80}\b(?:not clear|not specified|not stated|not identified|unclear|unknown)\b/iu,
+] as const;
+
+const validTimeContextExpectations = {
+  ...highQualityExpectations,
+  forbiddenFeedbackPatterns: relativeTimeWarningPatterns,
+} as const satisfies ReviewEvaluationExpectations;
+
 function textRequest(draft: string): EditorialInput {
   return { draft, sourceUrl: "" };
+}
+
+function englishMealProgrammeDraft(timeExpression: string) {
+  return [
+    "Harbour Council announces free meal programme",
+    `Harbour Council announced a free meal programme ${timeExpression}. The council said it will operate at three community centres and serve up to 500 eligible residents.`,
+    "Applications are available through the council's community services office, according to the announcement.",
+  ].join("\n\n");
+}
+
+function traditionalMealProgrammeDraft(timeExpression: string) {
+  return [
+    "海港市議會公布免費膳食計劃",
+    `海港市議會${timeExpression}公布免費膳食計劃。市議會表示，計劃將於三個社區中心推行，最多服務500名合資格居民。`,
+    "市議會表示，合資格居民可透過社區服務辦事處申請。",
+  ].join("\n\n");
 }
 
 const traditionalPoorDraft =
@@ -207,6 +239,121 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
       ].join("\n\n"),
     ),
     expected: publicationReadyExpectations,
+  },
+  {
+    id: "english_relative_yesterday",
+    language: "english",
+    inputKind: "text",
+    tags: ["english", "high_quality", "time_context", "relative_time", "yesterday"],
+    request: textRequest(englishMealProgrammeDraft("yesterday")),
+    expected: validTimeContextExpectations,
+  },
+  {
+    id: "english_relative_recently",
+    language: "english",
+    inputKind: "text",
+    tags: ["english", "high_quality", "time_context", "relative_time", "recently"],
+    request: textRequest(englishMealProgrammeDraft("recently")),
+    expected: validTimeContextExpectations,
+  },
+  {
+    id: "traditional_relative_yesterday",
+    language: "traditional_chinese",
+    inputKind: "text",
+    tags: ["traditional_chinese", "high_quality", "time_context", "relative_time", "昨天"],
+    request: textRequest(traditionalMealProgrammeDraft("昨天")),
+    expected: validTimeContextExpectations,
+  },
+  {
+    id: "traditional_relative_recently",
+    language: "traditional_chinese",
+    inputKind: "text",
+    tags: ["traditional_chinese", "high_quality", "time_context", "relative_time", "近期"],
+    request: textRequest(traditionalMealProgrammeDraft("近期")),
+    expected: validTimeContextExpectations,
+  },
+  {
+    id: "missing_time_context",
+    language: "english",
+    inputKind: "text",
+    tags: ["english", "missing_facts", "missing_time", "time_context"],
+    request: textRequest(
+      [
+        "Harbour Council announces free meal programme",
+        "Harbour Council announced a free meal programme for eligible residents. The council said the programme will begin at three community centres and applicants may register online.",
+        "The council said eligibility rules and the participating locations are available on its website.",
+      ].join("\n\n"),
+    ),
+    expected: {
+      readinessBand: "STRONG_LIMITED_EDITING",
+      allowedReadinessBands: ["STRONG_LIMITED_EDITING", "SUBSTANTIAL_REWRITE"],
+      overallScoreRange: [60, 89],
+      maximumOverallRunSpread: 10,
+      maximumCategoryRunSpread: 15,
+      maximumCategoryScores: { factualCompletenessScore: 89 },
+      maximumAppliedScoreCap: 89,
+      minimumFindings: 1,
+      requiredFeedbackPatterns: [/\b(?:time|timing|when|chronolog|date)\w*\b/iu],
+    },
+  },
+  {
+    id: "contradictory_time_context",
+    language: "english",
+    inputKind: "text",
+    tags: ["english", "contradictory", "contradictory_time", "time_context"],
+    request: textRequest(
+      [
+        "Harbour Council gives conflicting launch timing",
+        "Harbour Council said yesterday that its free meal programme launched last week. The same announcement later said the programme will launch next week at three community centres.",
+        "The council said eligible residents may register online.",
+      ].join("\n\n"),
+    ),
+    expected: {
+      readinessBand: "WEAK",
+      allowedReadinessBands: ["SEVERELY_DEFICIENT", "WEAK", "SUBSTANTIAL_REWRITE"],
+      overallScoreRange: [0, 74],
+      maximumOverallRunSpread: 12,
+      maximumCategoryRunSpread: 15,
+      maximumCategoryScores: { factualCompletenessScore: 59 },
+      maximumAppliedScoreCap: 59,
+      minimumFindings: 1,
+      requiredFeedbackPatterns: [/\b(?:contradict|conflict|inconsisten|chronolog|timeline)\w*\b/iu],
+    },
+  },
+  {
+    id: "english_exact_calendar_date",
+    language: "english",
+    inputKind: "text",
+    tags: ["english", "high_quality", "time_context", "exact_date"],
+    request: textRequest(englishMealProgrammeDraft("on 22 July 2026")),
+    expected: validTimeContextExpectations,
+  },
+  {
+    id: "time_context_not_required",
+    language: "english",
+    inputKind: "text",
+    tags: ["english", "time_context", "time_not_required", "service_explainer"],
+    request: textRequest(
+      [
+        "How Harbour Council libraries serve residents",
+        "Harbour Council's library network offers free study spaces, computer access and reference services. Residents may use any branch with a library card, the council said.",
+        "The network also provides accessible workstations and staff assistance for catalogue searches.",
+      ].join("\n\n"),
+    ),
+    expected: {
+      readinessBand: "STRONG_LIMITED_EDITING",
+      allowedReadinessBands: [
+        "SEVERELY_DEFICIENT",
+        "WEAK",
+        "SUBSTANTIAL_REWRITE",
+        "STRONG_LIMITED_EDITING",
+        "PUBLICATION_READY",
+      ],
+      overallScoreRange: [0, 100],
+      maximumOverallRunSpread: 20,
+      maximumCategoryRunSpread: 20,
+      forbiddenFeedbackPatterns: relativeTimeWarningPatterns,
+    },
   },
   {
     id: "english_poor_draft",
@@ -367,6 +514,20 @@ function categoryScores(review: ReviewResult): ReviewCategoryScores {
   return Object.fromEntries(scoreKeys.map((key) => [key, review[key]])) as ReviewCategoryScores;
 }
 
+function reviewFeedbackText(review: ReviewResult) {
+  return [
+    ...Object.values(review.scoreReasons),
+    ...review.findings.flatMap(({ issue, evidence, recommendation }) => [
+      issue,
+      evidence,
+      recommendation,
+    ]),
+    ...review.strengths,
+    ...review.missingInformation,
+    ...review.recommendations,
+  ].join("\n");
+}
+
 export interface ReviewEvaluationResult {
   readonly passed: boolean;
   readonly failures: string[];
@@ -457,6 +618,18 @@ export function evaluateReviewResult(
   }
   if (review.findings.length < (expected.minimumFindings ?? 0)) {
     failures.push(`Expected at least ${expected.minimumFindings} structured finding(s).`);
+  }
+
+  const feedbackText = reviewFeedbackText(review);
+  for (const pattern of expected.requiredFeedbackPatterns ?? []) {
+    if (!pattern.test(feedbackText)) {
+      failures.push(`Feedback does not match required pattern ${String(pattern)}.`);
+    }
+  }
+  for (const pattern of expected.forbiddenFeedbackPatterns ?? []) {
+    if (pattern.test(feedbackText)) {
+      failures.push(`Feedback matches forbidden pattern ${String(pattern)}.`);
+    }
   }
 
   if (passScore !== undefined) {

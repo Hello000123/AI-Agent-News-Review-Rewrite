@@ -57,6 +57,13 @@ describe("agent prompts", () => {
     expect(prompt).toContain("publisher reputation");
     expect(prompt).toContain("Newsworthiness never increases writing-quality scores");
     expect(prompt).toContain("Apply the same standard to English and Traditional Chinese");
+    expect(prompt).toContain("An exact calendar date is not mandatory");
+    expect(prompt).toContain("yesterday, today, recently");
+    expect(prompt).toContain("昨天, 今日, 近日, 近期");
+    expect(prompt).toContain("no meaningful date or time information");
+    expect(prompt).toContain("genuinely unclear, internally contradictory");
+    expect(prompt).toContain("chronology is not relevant");
+    expect(prompt).toContain("Do not infer or invent an exact date");
     expect(prompt).toContain("Score every category independently");
     expect(prompt).not.toContain("Classify the band first");
     expect(prompt).toContain("Any category below 40 caps it at 59");
@@ -75,6 +82,12 @@ describe("agent prompts", () => {
     const payload = embeddedJson(prompt) as {
       draftOrigin: string;
       submittedDraft: string;
+      detectedTimeContext: {
+        exactDateExpressions: string[];
+        relativeTimeExpressions: string[];
+        uncertaintyCues: string[];
+        contradictionCues: string[];
+      };
       referenceMaterial: {
         sourceUrl?: string;
         linkedTitle?: string;
@@ -88,6 +101,12 @@ describe("agent prompts", () => {
     expect(payload).toEqual({
       draftOrigin: "user_submitted_text",
       submittedDraft: editorialSource.primaryText,
+      detectedTimeContext: {
+        exactDateExpressions: [],
+        relativeTimeExpressions: [],
+        uncertaintyCues: [],
+        contradictionCues: [],
+      },
       referenceMaterial: {
         sourceUrl: editorialSource.sourceUrl,
         linkedTitle: editorialSource.linkedTitle,
@@ -115,7 +134,7 @@ describe("agent prompts", () => {
     for (const rule of [
       "publication-quality news report",
       "primaryText is the article to rewrite and controls its factual meaning",
-      "Review feedback is editorial guidance, never a factual source",
+      "Review feedback and earlier AI rewrites are editorial context",
       "Preserve material facts, names, titles, dates, locations, figures",
       "Never romanize or transliterate a Chinese name",
       "Every digit-containing output value must trace exactly to allowedNumericValues",
@@ -127,6 +146,12 @@ describe("agent prompts", () => {
       "Do not replace words solely to make the output look different",
       "an exact, whitespace-only, or punctuation-only echo of primaryText is not a rewrite",
       "requiredOutputLanguage is derived automatically from primaryText",
+      "Only currentRefinement.lengthOption controls this response",
+      "For concise, produce a shorter, more direct version",
+      "For more_detailed, expand only with information explicitly present",
+      "Never fabricate detail to add length",
+      "latest instruction wins",
+      "Never convert a relative time expression into an exact calendar date",
       "one headline, one blank line, then the article body",
       "No markdown, score, commentary, preface, byline, or outlet attribution",
     ]) {
@@ -153,6 +178,11 @@ describe("agent prompts", () => {
       verbatimSourceScriptNames: string[];
       source: SourceSnapshot;
       reviewFeedback: unknown;
+      rewriteSession: {
+        earlierTurns: unknown[];
+        currentTurn: unknown;
+        currentRefinement: { lengthOption: null; instruction: string };
+      };
     };
 
     expect(prompt).toContain("explicitly requested a rewrite regardless of review score");
@@ -163,6 +193,58 @@ describe("agent prompts", () => {
     expect(payload.verbatimMixedLanguageTerms).toContain("Blue Harbour AI");
     expect(payload.source).toEqual(editorialSource);
     expect(payload.reviewFeedback).toEqual(highReview);
+    expect(payload.rewriteSession).toEqual({
+      earlierTurns: [],
+      currentTurn: null,
+      currentRefinement: { lengthOption: null, instruction: "" },
+    });
+  });
+
+  it("sends the current version, ordered prior turns, all instructions, and latest preference", () => {
+    const prompt = createRewriteUserPrompt(editorialSource, highReview, {
+      history: [
+        {
+          rewrittenText: "First headline\n\nFirst rewritten version.",
+          lengthOption: "concise",
+          instruction: "Make the opening more engaging.",
+        },
+        {
+          rewrittenText: "Second headline\n\nSecond rewritten version.",
+          lengthOption: "more_detailed",
+          instruction: "Move the quotation to the second paragraph.",
+        },
+      ],
+      refinement: {
+        lengthOption: "concise",
+        instruction: "Use a more formal tone and retain the confirmed 30 seats.",
+      },
+    });
+    const payload = embeddedJson(prompt) as {
+      allowedNumericValues: string[];
+      rewriteSession: {
+        earlierTurns: Array<Record<string, unknown>>;
+        currentTurn: Record<string, unknown>;
+        currentRefinement: Record<string, unknown>;
+      };
+    };
+
+    expect(payload.rewriteSession.earlierTurns).toEqual([
+      {
+        rewrittenText: "First headline\n\nFirst rewritten version.",
+        lengthOption: "concise",
+        instruction: "Make the opening more engaging.",
+      },
+    ]);
+    expect(payload.rewriteSession.currentTurn).toEqual({
+      rewrittenText: "Second headline\n\nSecond rewritten version.",
+      lengthOption: "more_detailed",
+      instruction: "Move the quotation to the second paragraph.",
+    });
+    expect(payload.rewriteSession.currentRefinement).toEqual({
+      lengthOption: "concise",
+      instruction: "Use a more formal tone and retain the confirmed 30 seats.",
+    });
+    expect(payload.allowedNumericValues).toContain("30");
   });
 
   it("extracts supported quotation styles, mixed-language terms, and numeric values exactly", () => {

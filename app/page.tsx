@@ -48,7 +48,7 @@ export default function Home() {
 
         <footer>
           <p>AI can make mistakes. Verify names, dates, quotations, statistics, and attributions.</p>
-          <p>No login, publishing, or draft history is included.</p>
+          <p>No login or publishing. The active article session is kept only in this browser tab.</p>
         </footer>
       </div>
     </main>

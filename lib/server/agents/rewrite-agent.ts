@@ -28,19 +28,27 @@ import {
   type QuotationIssue,
   type ReviewResult,
   type RewriteApiResponse,
+  type RewriteContext,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
+
+const EMPTY_REWRITE_CONTEXT: RewriteContext = {
+  history: [],
+  refinement: { lengthOption: null, instruction: "" },
+};
 
 function removeCodeFence(text: string) {
   const match = text.match(/^\x60\x60\x60(?:text|markdown)?\s*([\s\S]*?)\s*\x60\x60\x60$/iu);
   return (match?.[1] ?? text).trim();
 }
 
-function sourceCorpus(source: SourceSnapshot) {
+function sourceCorpus(source: SourceSnapshot, context: RewriteContext) {
   return [
     source.primaryText,
     source.linkedText ?? "",
     ...source.imageContext.map(({ text }) => text),
+    ...context.history.map(({ instruction }) => instruction),
+    context.refinement.instruction,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -48,6 +56,18 @@ function sourceCorpus(source: SourceSnapshot) {
 
 function canonicalArticle(text: string) {
   return text.normalize("NFC").replace(/[\p{P}\s]+/gu, "");
+}
+
+function isEditingBaselineEcho(
+  candidate: string,
+  source: SourceSnapshot,
+  context: RewriteContext,
+) {
+  const candidateArticle = canonicalArticle(candidate);
+  const currentRewrittenVersion = context.history.at(-1)?.rewrittenText;
+  return [source.primaryText, currentRewrittenVersion]
+    .filter((text): text is string => Boolean(text))
+    .some((text) => candidateArticle === canonicalArticle(text));
 }
 
 function hasRequiredRewriteFormat(text: string) {
@@ -161,6 +181,7 @@ function extractEnglishSmallNumberValues(text: string) {
 function validateSafeCandidate(
   candidate: string,
   source: SourceSnapshot,
+  context: RewriteContext,
 ) {
   if (!candidate) {
     throw new AppError(
@@ -213,7 +234,9 @@ function validateSafeCandidate(
     );
   }
 
-  const allowedNumericValues = new Set(extractComparableNumericValues(sourceCorpus(source)));
+  const allowedNumericValues = new Set(
+    extractComparableNumericValues(sourceCorpus(source, context)),
+  );
   const untraceableNumericValue = extractComparableNumericValues(candidate).find(
     (value) => !allowedNumericValues.has(value),
   );
@@ -478,7 +501,7 @@ function repairPunctuationOnlyQuotations(
 function unchangedError(candidateText: string, attempts: number) {
   return new AppError(
     "UNCHANGED_REWRITE",
-    "The Rewrite Agent returned an exact, whitespace-only, or punctuation-only copy after the correction attempt. Retry the rewrite; the source remains unchanged and no older result has been substituted.",
+    "The Rewrite Agent returned an exact, whitespace-only, or punctuation-only copy of the active editing baseline after the correction attempt. Retry the rewrite; no older result has been substituted.",
     422,
     {
       publicDetails: {
@@ -531,15 +554,16 @@ export async function runRewriteAgent(
   source: SourceSnapshot,
   review: ReviewResult,
   completionRunner: CompletionRunner = requestDeepSeekCompletion,
+  context: RewriteContext = EMPTY_REWRITE_CONTEXT,
 ): Promise<RewriteApiResponse> {
   const firstCandidate = await generateCandidate(
-    createRewriteUserPrompt(source, review),
+    createRewriteUserPrompt(source, review, context),
     completionRunner,
   );
 
   let firstSafetyError: AppError | null = null;
   try {
-    validateSafeCandidate(firstCandidate, source);
+    validateSafeCandidate(firstCandidate, source, context);
   } catch (error) {
     if (!(error instanceof AppError)) throw error;
     firstSafetyError = error;
@@ -564,8 +588,7 @@ export async function runRewriteAgent(
     firstQuotationValidation.issues,
     source.primaryText,
   );
-  const firstIsUnchanged =
-    canonicalArticle(firstCandidate) === canonicalArticle(source.primaryText);
+  const firstIsUnchanged = isEditingBaselineEcho(firstCandidate, source, context);
 
   if (!firstSafetyError && firstQuotationValidation.valid && !firstIsUnchanged) {
     return rewriteApiResponseSchema.parse({
@@ -580,12 +603,14 @@ export async function runRewriteAgent(
         { code: firstSafetyError.code, message: firstSafetyError.message },
         source,
         review,
+        context,
       )
     : firstIsUnchanged
       ? createUnchangedRewriteCorrectionPrompt(
           firstCandidate,
           source,
           review,
+          context,
         )
       : createQuotationCorrectionPrompt(
           firstCandidate,
@@ -623,7 +648,7 @@ export async function runRewriteAgent(
         : 0.1,
     );
     secondCandidate = restoreHeadlineAfterFocusedCorrection(secondCandidate, firstCandidate);
-    validateSafeCandidate(secondCandidate, source);
+    validateSafeCandidate(secondCandidate, source, context);
   } catch (error) {
     // A quotation-failed first draft is safe to retain for diagnosis when the
     // focused correction itself is unusable. Never fall back to an older UI result.
@@ -644,7 +669,7 @@ export async function runRewriteAgent(
     throw error;
   }
 
-  if (canonicalArticle(secondCandidate) === canonicalArticle(source.primaryText)) {
+  if (isEditingBaselineEcho(secondCandidate, source, context)) {
     throw unchangedError(secondCandidate, 2);
   }
 
@@ -658,11 +683,8 @@ export async function runRewriteAgent(
       secondQuotationValidation,
     );
     if (punctuationRepairedCandidate) {
-      validateSafeCandidate(punctuationRepairedCandidate, source);
-      if (
-        canonicalArticle(punctuationRepairedCandidate) ===
-        canonicalArticle(source.primaryText)
-      ) {
+      validateSafeCandidate(punctuationRepairedCandidate, source, context);
+      if (isEditingBaselineEcho(punctuationRepairedCandidate, source, context)) {
         throw unchangedError(punctuationRepairedCandidate, 2);
       }
       const repairedValidation = validateQuotationPreservation(

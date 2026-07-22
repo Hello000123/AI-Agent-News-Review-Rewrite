@@ -216,6 +216,103 @@ describe("rewrite workflow", () => {
     );
   });
 
+  it("passes the current rewrite, ordered instructions, and active length preference to the agent", async () => {
+    const source = sourceSnapshot(
+      "Council announces service plan\n\nThe council announced a supported service plan.",
+    );
+    const finalText =
+      "Council details service plan\n\nThe council announced the supported plan in a formal report.";
+    const completion = vi.fn().mockResolvedValue(finalText);
+
+    await rewriteWithFeedback(source, highReview, completion, {
+      history: [
+        {
+          rewrittenText: "First plan headline\n\nThe council announced the service plan.",
+          lengthOption: "concise",
+          instruction: "Make the opening more engaging.",
+        },
+        {
+          rewrittenText: "Current plan headline\n\nThe council announced its supported plan.",
+          lengthOption: "more_detailed",
+          instruction: "Focus more on the programme benefits.",
+        },
+      ],
+      refinement: {
+        lengthOption: "concise",
+        instruction: "Use a more formal tone.",
+      },
+    });
+
+    const prompt = completion.mock.calls[0][0].userPrompt;
+    expect(prompt).toContain("First plan headline");
+    expect(prompt).toContain("Current plan headline");
+    expect(prompt).toContain("Make the opening more engaging.");
+    expect(prompt).toContain("Focus more on the programme benefits.");
+    expect(prompt).toContain('"lengthOption": "concise"');
+    expect(prompt).toContain("Use a more formal tone.");
+  });
+
+  it("treats an unchanged current rewrite as an echo and requests one genuine refinement", async () => {
+    const source = sourceSnapshot(
+      "Council announces service plan\n\nThe council announced a supported service plan.",
+    );
+    const current =
+      "Council confirms service plan\n\nA supported service plan was announced by the council.";
+    const corrected =
+      "Supported service plan confirmed\n\nThe council announced a supported plan for the service.";
+    const completion = vi.fn()
+      .mockResolvedValueOnce(current)
+      .mockResolvedValueOnce(corrected);
+
+    const result = await rewriteWithFeedback(source, highReview, completion, {
+      history: [
+        {
+          rewrittenText: current,
+          lengthOption: null,
+          instruction: "Use a clearer lead.",
+        },
+      ],
+      refinement: { lengthOption: null, instruction: "Reduce repetition." },
+    });
+
+    expect(result).toEqual({
+      finalText: corrected,
+      validation: { status: "passed_after_retry", attempts: 2 },
+    });
+    expect(completion).toHaveBeenCalledTimes(2);
+    expect(completion.mock.calls[1][0].userPrompt).toContain("active editing baseline");
+    expect(completion.mock.calls[1][0].userPrompt).toContain("Reduce repetition.");
+  });
+
+  it("allows explicit user-supplied detail but corrects invented detail in more-detailed mode", async () => {
+    const source = sourceSnapshot(
+      "Council announces venue plan\n\nThe council announced a supported venue plan.",
+    );
+    const invented =
+      "Council expands venue plan\n\nThe council announced the plan for a venue with 99 seats.";
+    const corrected =
+      "Council details venue plan\n\nThe council announced the plan for a venue with 30 seats.";
+    const completion = vi.fn()
+      .mockResolvedValueOnce(invented)
+      .mockResolvedValueOnce(corrected);
+
+    const result = await rewriteWithFeedback(source, highReview, completion, {
+      history: [],
+      refinement: {
+        lengthOption: "more_detailed",
+        instruction: "The user confirms that the venue has 30 seats.",
+      },
+    });
+
+    expect(result.finalText).toBe(corrected);
+    expect(result.validation).toEqual({ status: "passed_after_retry", attempts: 2 });
+    expect(completion).toHaveBeenCalledTimes(2);
+    expect(completion.mock.calls[0][0].systemPrompt).toContain(
+      "Never fabricate detail to add length",
+    );
+    expect(completion.mock.calls[1][0].userPrompt).toContain("UNTRACEABLE_REWRITE_NUMBER");
+  });
+
   it.each([
     ["exact", "Council approves night-bus trial\n\nThe council approved a night-bus trial on Tuesday."],
     [
