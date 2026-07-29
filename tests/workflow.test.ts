@@ -52,10 +52,17 @@ describe("review workflow", () => {
   it("returns a calibrated failing review and source snapshot after one model call", async () => {
     const completion = vi.fn().mockResolvedValue(JSON.stringify(lowReviewModelResponse));
 
-    const result = await reviewDraft("we got update. more soon.", {
-      passScore: 80,
-      completionRunner: completion,
-    });
+    const result = await reviewDraft(
+      {
+        draft: "we got update. more soon.",
+        sourceUrl: "",
+        model: "deepseek-v4-pro",
+      },
+      {
+        passScore: 80,
+        completionRunner: completion,
+      },
+    );
 
     expect(result.review).toEqual(lowReview);
     expect(result.review.decision).toBe("REWRITE_REQUIRED");
@@ -69,6 +76,7 @@ describe("review workflow", () => {
     expect(result.message).toContain("below the quality threshold");
     expect(completion).toHaveBeenCalledTimes(1);
     expect(completion.mock.calls[0][0]).toMatchObject({
+      model: "deepseek-v4-pro",
       responseFormat: "json",
       temperature: 0,
     });
@@ -197,7 +205,16 @@ describe("rewrite workflow", () => {
       "Council issues verified service update\n\nA verified service update has been published by the council.";
     const completion = vi.fn().mockResolvedValue(finalText);
 
-    const result = await rewriteWithFeedback(source, highReview, completion);
+    const result = await rewriteWithFeedback(
+      source,
+      highReview,
+      completion,
+      {
+        history: [],
+        refinement: { lengthOption: null, instruction: "" },
+      },
+      "deepseek-v4-pro",
+    );
 
     expect(result).toEqual({
       finalText,
@@ -205,6 +222,7 @@ describe("rewrite workflow", () => {
     });
     expect(completion).toHaveBeenCalledTimes(1);
     expect(completion.mock.calls[0][0]).toMatchObject({
+      model: "deepseek-v4-pro",
       responseFormat: "text",
       temperature: 0.1,
     });

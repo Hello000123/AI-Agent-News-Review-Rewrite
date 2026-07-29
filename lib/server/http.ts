@@ -58,10 +58,13 @@ export function jsonResponse<T>(body: T, status = 200) {
 
 export function errorResponse(error: unknown) {
   if (error instanceof ZodError) {
+    const unsupportedModel = error.issues.some((issue) => issue.path.at(-1) === "model");
     const body: ApiErrorResponse = {
       error: {
         code: "VALIDATION_ERROR",
-        message: "Check the submitted draft and try again.",
+        message: unsupportedModel
+          ? "Unsupported AI model. Choose DeepSeek V4 Pro or Grok 4.5."
+          : "Check the submitted draft and try again.",
         details: error.issues.map((issue) => issue.message),
       },
     };

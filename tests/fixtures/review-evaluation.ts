@@ -18,10 +18,10 @@ export const EVALUATION_REVIEW_SCORE_WEIGHTS = {
 } as const satisfies Record<keyof ReviewCategoryScores, number>;
 
 export const REVIEW_EVALUATION_REQUEST_PARAMETERS = {
-  model: "deepseek-v4-pro",
-  thinking: "enabled",
-  reasoningEffort: "max",
-  temperature: "not_sent_in_thinking_mode",
+  model: "grok-4.5",
+  reasoning: "required",
+  reasoningEffort: "high",
+  temperature: "not_sent_for_reasoning_model",
   maxTokens: 64_000,
   stream: true,
 } as const;

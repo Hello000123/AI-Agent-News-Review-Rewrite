@@ -127,6 +127,7 @@ describe("score-first workspace", () => {
     expect(reviewMock).toHaveBeenCalledWith({
       draft: "Original supported facts.",
       sourceUrl: "",
+      model: "grok-4.5",
     });
     expect(rewriteMock).not.toHaveBeenCalled();
   });
@@ -148,6 +149,64 @@ describe("score-first workspace", () => {
     expect(reviewMock).toHaveBeenCalledWith({
       draft: "",
       sourceUrl: "https://example.com/article",
+      model: "grok-4.5",
+    });
+  });
+
+  it("changes the model for review and rewrite, marks older feedback stale, and persists it", async () => {
+    const reviewedSource = sourceFor("Model selection facts.");
+    reviewMock.mockResolvedValue({
+      ...reviewResponse(highReview, reviewedSource.primaryText),
+      source: reviewedSource,
+    });
+    rewriteMock.mockResolvedValue(
+      rewriteResponse("Selected model headline\n\nSelected model report."),
+    );
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} initialModel="grok-4.5" />);
+
+    await submitReview(user, reviewedSource.primaryText);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Change AI model. Current model: Grok 4.5",
+      }),
+    );
+    expect(screen.getByRole("group", { name: "Choose the AI model" })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: /Grok 4.3/u })).toBeNull();
+    await user.click(screen.getByRole("radio", { name: /DeepSeek V4 Pro/u }));
+
+    expect(
+      screen.getByRole("button", {
+        name: "Change AI model. Current model: DeepSeek V4 Pro",
+      }),
+    ).toBeTruthy();
+    expect(await screen.findByText("Review applies to an earlier version")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Rewrite with AI" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    await user.click(screen.getByRole("button", { name: "Review Draft" }));
+    await waitFor(() => expect(reviewMock).toHaveBeenCalledTimes(2));
+    expect(reviewMock).toHaveBeenNthCalledWith(2, {
+      draft: reviewedSource.primaryText,
+      sourceUrl: "",
+      model: "deepseek-v4-pro",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Rewrite with AI" }));
+    await screen.findByLabelText("Final news report text");
+    expect(rewriteMock).toHaveBeenCalledWith(
+      reviewedSource,
+      highReview,
+      [],
+      { lengthOption: null, instruction: "" },
+      "deepseek-v4-pro",
+    );
+    await waitFor(() => {
+      const stored = JSON.parse(
+        window.sessionStorage.getItem(REWRITE_SESSION_STORAGE_KEY) ?? "null",
+      ) as { model?: string } | null;
+      expect(stored?.model).toBe("deepseek-v4-pro");
     });
   });
 
@@ -172,6 +231,7 @@ describe("score-first workspace", () => {
       highReview,
       [],
       { lengthOption: null, instruction: "" },
+      "grok-4.5",
     );
   });
 
@@ -218,6 +278,7 @@ describe("score-first workspace", () => {
       highReview,
       [{ rewrittenText: firstText, lengthOption: null, instruction: "" }],
       { lengthOption: null, instruction: "" },
+      "grok-4.5",
     );
   });
 
@@ -287,6 +348,7 @@ describe("score-first workspace", () => {
         highReview,
         [{ rewrittenText: firstText, lengthOption: null, instruction: "" }],
         { lengthOption: expectedOption, instruction },
+        "grok-4.5",
       );
     },
   );
@@ -345,6 +407,7 @@ describe("score-first workspace", () => {
         lengthOption: "more_detailed",
         instruction: "Move the quotation to the second paragraph.",
       },
+      "grok-4.5",
     );
   });
 
@@ -404,6 +467,7 @@ describe("score-first workspace", () => {
       highReview,
       [],
       { lengthOption: null, instruction: "" },
+      "grok-4.5",
     );
   });
 
@@ -462,6 +526,7 @@ describe("score-first workspace", () => {
         },
       ],
       { lengthOption: null, instruction: "Retain that instruction after refresh." },
+      "grok-4.5",
     );
   });
 
@@ -510,7 +575,7 @@ describe("score-first workspace", () => {
     expect(rewriteMock).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Rewrite Again" }));
     expect(screen.queryByLabelText("Final news report text")).toBeNull();
-    await act(async () => laterRewrite.reject(new ApiRequestError("DEEPSEEK_TIMEOUT", "Timed out.")));
+    await act(async () => laterRewrite.reject(new ApiRequestError("XAI_TIMEOUT", "Timed out.")));
     expect(await screen.findByText("Timed out.")).toBeTruthy();
     expect(screen.queryByLabelText("Final news report text")).toBeNull();
   });
@@ -645,7 +710,7 @@ describe("score-first workspace", () => {
     await waitFor(() => expect((editor as HTMLTextAreaElement).disabled).toBe(false));
   });
 
-  it("keeps long maximum-reasoning work visibly active with an elapsed timer", async () => {
+  it("keeps long high-reasoning work visibly active with an elapsed timer", async () => {
     vi.useFakeTimers();
     const pendingReview = deferred<ReviewApiResponse>();
     reviewMock.mockReturnValue(pendingReview.promise);
@@ -659,7 +724,7 @@ describe("score-first workspace", () => {
     expect(screen.getByText("Elapsed: 0s")).toBeTruthy();
 
     await act(async () => vi.advanceTimersByTime(31_000));
-    expect(screen.getByText(/maximum reasoning effort/u)).toBeTruthy();
+    expect(screen.getByText(/high reasoning effort/u)).toBeTruthy();
     expect(screen.getByText("Elapsed: 31s")).toBeTruthy();
     expect((screen.getByRole("button", { name: /Reviewing Draft/u }) as HTMLButtonElement).disabled)
       .toBe(true);
@@ -675,16 +740,16 @@ describe("score-first workspace", () => {
   it("shows safe stage, provider, model, HTTP status, and cause diagnostics", async () => {
     reviewMock.mockRejectedValue(
       new ApiRequestError(
-        "DEEPSEEK_MODEL_ERROR",
-        "DeepSeek rejected the configured model.",
+        "XAI_MODEL_ERROR",
+        "xAI could not access the selected Grok model.",
         {
           retryable: false,
           stage: "review_request",
-          provider: "DeepSeek",
+          provider: "xAI",
           model: "invalid-model-diagnostic",
-          httpStatus: 400,
+          httpStatus: 404,
           causeSummary:
-            "DeepSeek rejected configured model invalid-model-diagnostic. Supported model IDs are deepseek-v4-pro and deepseek-v4-flash.",
+            "xAI could not find selected model invalid-model-diagnostic. Verify that this API key can access invalid-model-diagnostic.",
         },
       ),
     );
@@ -695,10 +760,10 @@ describe("score-first workspace", () => {
     await user.click(screen.getByRole("button", { name: "Review Draft" }));
 
     expect(await screen.findByText("Review Agent request")).toBeTruthy();
-    expect(screen.getByText("DeepSeek")).toBeTruthy();
+    expect(screen.getByText("xAI")).toBeTruthy();
     expect(screen.getAllByText("invalid-model-diagnostic").length).toBeGreaterThan(0);
-    expect(screen.getByText("400")).toBeTruthy();
-    expect(screen.getByText(/Supported model IDs/u)).toBeTruthy();
+    expect(screen.getByText("404")).toBeTruthy();
+    expect(screen.getByText(/access invalid-model-diagnostic/u)).toBeTruthy();
     expect(document.body.textContent).not.toContain("Authorization");
     expect(document.body.textContent).not.toContain("PRIVATE_REASONING_MARKER");
   });

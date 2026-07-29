@@ -21,6 +21,12 @@ import {
   type RewriteRefinement,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
+import {
+  DEFAULT_SELECTABLE_MODEL,
+  SELECTABLE_MODELS,
+  selectableModelById,
+  type SelectableModelId,
+} from "@/lib/shared/models";
 
 type ProcessingState = "idle" | "reviewing" | "rewriting";
 
@@ -50,6 +56,7 @@ interface VisibleError {
 
 interface PressReleaseWorkspaceProps {
   initialPassScore: number;
+  initialModel?: SelectableModelId;
 }
 
 const EMPTY_REWRITE_REFINEMENT: RewriteRefinement = {
@@ -86,12 +93,18 @@ function inputSignature(input: EditorialInput) {
   return JSON.stringify({
     draft: input.draft,
     sourceUrl: input.sourceUrl,
+    model: input.model ?? DEFAULT_SELECTABLE_MODEL,
   });
 }
 
-export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspaceProps) {
+export function PressReleaseWorkspace({
+  initialPassScore,
+  initialModel = DEFAULT_SELECTABLE_MODEL,
+}: PressReleaseWorkspaceProps) {
   const [draft, setDraft] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
+  const [selectedModel, setSelectedModel] = useState<SelectableModelId>(initialModel);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [reviewedInputSignature, setReviewedInputSignature] = useState("");
   const [reviewedSource, setReviewedSource] = useState<SourceSnapshot | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
@@ -116,6 +129,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
   const lastRefinementRef = useRef<RewriteRefinement>(EMPTY_REWRITE_REFINEMENT);
   const busy = processing !== "idle";
   const words = countWords(draft);
+  const selectedModelDetails = selectableModelById(selectedModel);
 
   useEffect(() => {
     if (processing === "idle") return;
@@ -133,11 +147,24 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
       if (cancelled) return;
       const stored = loadRewriteSession();
       if (stored) {
-        const restoredInput = { draft: stored.draft, sourceUrl: stored.sourceUrl };
-        if (inputSignature(restoredInput) === stored.reviewedInputSignature) {
+        const restoredInput = {
+          draft: stored.draft,
+          sourceUrl: stored.sourceUrl,
+          model: stored.model,
+        };
+        const restoredSignature = inputSignature(restoredInput);
+        const legacySignature = JSON.stringify({
+          draft: stored.draft,
+          sourceUrl: stored.sourceUrl,
+        });
+        if (
+          restoredSignature === stored.reviewedInputSignature ||
+          legacySignature === stored.reviewedInputSignature
+        ) {
           setDraft(stored.draft);
           setSourceUrl(stored.sourceUrl);
-          setReviewedInputSignature(stored.reviewedInputSignature);
+          setSelectedModel(stored.model);
+          setReviewedInputSignature(restoredSignature);
           setReviewedSource(stored.reviewedSource);
           setReview(stored.review);
           setRewriteHistory(stored.history);
@@ -170,7 +197,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
       !review ||
       !reviewedSource ||
       !reviewedInputSignature ||
-      inputSignature({ draft, sourceUrl }) !== reviewedInputSignature
+      inputSignature({ draft, sourceUrl, model: selectedModel }) !== reviewedInputSignature
     ) {
       return;
     }
@@ -179,6 +206,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
       version: 1,
       draft,
       sourceUrl,
+      model: selectedModel,
       reviewedInputSignature,
       reviewedSource,
       review,
@@ -194,6 +222,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     reviewedInputSignature,
     reviewedSource,
     rewriteHistory,
+    selectedModel,
     sessionHydrated,
     sourceUrl,
   ]);
@@ -202,6 +231,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     return {
       draft,
       sourceUrl,
+      model: selectedModel,
     };
   }
 
@@ -246,6 +276,12 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     clearRewriteSession();
   }
 
+  function handleModelChange(model: SelectableModelId) {
+    if (inFlightRef.current || model === selectedModel) return;
+    setSelectedModel(model);
+    markSourceChanged();
+  }
+
   function validateInput(input: EditorialInput) {
     if (!input.draft.trim() && !input.sourceUrl.trim()) {
       return "Enter draft text or a source URL before requesting a review.";
@@ -281,6 +317,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
     setRewriteHistory([]);
     lastRefinementRef.current = EMPTY_REWRITE_REFINEMENT;
     clearRewriteSession();
+    setModelPickerOpen(false);
     setElapsedSeconds(0);
     setProcessing("reviewing");
 
@@ -344,6 +381,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
         review,
         rewriteHistory,
         submittedRefinement,
+        selectedModel,
       );
       if (activeRequestRef.current !== requestId) return;
       setRewriteHistory((history) => [
@@ -442,7 +480,7 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
       ? "Creating and validating the latest requested rewrite."
       : "";
   const longReasoningMessage = elapsedSeconds >= 30
-    ? " DeepSeek V4 Pro is still working at maximum reasoning effort; complex requests can take several minutes."
+    ? ` ${selectedModelDetails.label} is still working at high reasoning effort; complex requests can take several minutes.`
     : "";
 
   return (
@@ -457,8 +495,70 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
             <h2>Add the article or draft</h2>
             <p>Paste text or add one public article URL.</p>
           </div>
-          <span className="privacy-note">Sent to DeepSeek only when submitted</span>
+          <div className="section-heading-tools">
+            <span className="privacy-note">Sent to the selected AI provider only when submitted</span>
+            <button
+              className="model-change-button"
+              type="button"
+              aria-label={`Change AI model. Current model: ${selectedModelDetails.label}`}
+              aria-expanded={modelPickerOpen}
+              aria-controls="model-picker"
+              onClick={() => setModelPickerOpen((open) => !open)}
+              disabled={busy}
+            >
+              <span>AI model</span>
+              <strong>{selectedModelDetails.label}</strong>
+              <span className="model-change-action" aria-hidden="true">
+                Change
+              </span>
+            </button>
+          </div>
         </div>
+
+        {modelPickerOpen ? (
+          <fieldset id="model-picker" className="model-picker" disabled={busy}>
+            <legend>Choose the AI model</legend>
+            <div className="model-picker-intro">
+              <p>Both options use high reasoning for every review and rewrite.</p>
+              <span>High reasoning</span>
+            </div>
+            <div className="model-option-grid">
+              {SELECTABLE_MODELS.map((model) => (
+                <label
+                  className={
+                    "model-option " + (selectedModel === model.id ? "model-option-selected" : "")
+                  }
+                  key={model.id}
+                >
+                  <input
+                    type="radio"
+                    name="ai-model"
+                    value={model.id}
+                    checked={selectedModel === model.id}
+                    onChange={() => handleModelChange(model.id)}
+                  />
+                  <span className="model-option-copy">
+                    <span className="model-option-title">
+                      <strong>{model.label}</strong>
+                      {model.recommended ? <span>Recommended</span> : null}
+                    </span>
+                    <small>{model.description}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="model-picker-footer">
+              <p>Changing the model requires a new review before rewriting.</p>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => setModelPickerOpen(false)}
+              >
+                Done
+              </button>
+            </div>
+          </fieldset>
+        ) : null}
 
         <label className="input-label" htmlFor="draft-input">
           News draft or article text
@@ -525,7 +625,10 @@ export function PressReleaseWorkspace({ initialPassScore }: PressReleaseWorkspac
               "Review Draft"
             )}
           </button>
-          <p>Pass threshold: {initialPassScore}/100</p>
+          <p>
+            Pass threshold: {initialPassScore}/100 <span aria-hidden="true">·</span>{" "}
+            {selectedModelDetails.label} <span aria-hidden="true">·</span> High reasoning
+          </p>
         </div>
       </form>
 

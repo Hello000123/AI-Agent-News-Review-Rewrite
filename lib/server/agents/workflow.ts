@@ -18,6 +18,7 @@ import {
   type RewriteContext,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
+import type { SelectableModelId } from "@/lib/shared/models";
 
 interface ReviewWorkflowDependencies {
   completionRunner?: CompletionRunner;
@@ -139,7 +140,12 @@ export async function reviewDraft(
     editorialInput,
     dependencies.sourceContextDependencies,
   );
-  const review = await runReviewAgent(source, passScore, dependencies.completionRunner);
+  const review = await runReviewAgent(
+    source,
+    passScore,
+    dependencies.completionRunner,
+    editorialInput.model,
+  );
 
   return {
     review,
@@ -160,6 +166,7 @@ export async function rewriteWithFeedback(
     history: [],
     refinement: { lengthOption: null, instruction: "" },
   },
+  model?: SelectableModelId,
 ) {
-  return runRewriteAgent(source, review, completionRunner, context);
+  return runRewriteAgent(source, review, completionRunner, context, model);
 }

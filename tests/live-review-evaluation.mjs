@@ -42,12 +42,12 @@ if (requestedIds.size && selectedCases.length !== requestedIds.size) {
 }
 
 const explicitEvalModel = process.env.EVAL_MODEL?.trim();
-const configuredModel = process.env.DEEPSEEK_MODEL?.trim();
+const configuredModel = process.env.XAI_MODEL?.trim();
 const modelIdentifier = explicitEvalModel || configuredModel || "server-configured-model";
 const modelIdentifierSource = explicitEvalModel
   ? "EVAL_MODEL"
   : configuredModel
-    ? "DEEPSEEK_MODEL"
+    ? "XAI_MODEL"
     : "response-assumption";
 
 function isRecord(value) {

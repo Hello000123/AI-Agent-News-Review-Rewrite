@@ -21,6 +21,14 @@ export const DATASET_HEADERS = Object.freeze([
   "draft_text",
 ]);
 
+export const PIPE_DATASET_HEADERS = Object.freeze([
+  "global_order",
+  "draft_id",
+  "scenario_id",
+  "category",
+  "draft_text",
+]);
+
 export const RESULT_HEADERS = Object.freeze([
   "global_order",
   "draft_id",
@@ -167,6 +175,57 @@ export function parseCsv(input) {
   });
 }
 
+function splitPipeLine(line, lineNumber) {
+  const values = [];
+  let fieldStart = 0;
+
+  for (let fieldIndex = 0; fieldIndex < PIPE_DATASET_HEADERS.length - 1; fieldIndex += 1) {
+    const separator = line.indexOf("|", fieldStart);
+    if (separator === -1) {
+      throw new Error(
+        `Pipe dataset line ${lineNumber} has fewer than ${PIPE_DATASET_HEADERS.length} fields.`,
+      );
+    }
+    values.push(line.slice(fieldStart, separator));
+    fieldStart = separator + 1;
+  }
+  values.push(line.slice(fieldStart));
+  return values;
+}
+
+export function parsePipeDataset(input) {
+  const text = input.charCodeAt(0) === 0xFEFF ? input.slice(1) : input;
+  const lines = text.split(/\r?\n/u);
+  while (lines.at(-1) === "") lines.pop();
+  if (lines.length === 0) throw new Error("Pipe dataset is empty.");
+
+  const headers = splitPipeLine(lines[0], 1);
+  if (headers.join("\u0000") !== PIPE_DATASET_HEADERS.join("\u0000")) {
+    throw new Error(`Pipe dataset headers must be: ${PIPE_DATASET_HEADERS.join("|")}.`);
+  }
+
+  return lines.slice(1).map((line, index) => {
+    if (!line) throw new Error(`Pipe dataset line ${index + 2} is empty.`);
+    const values = splitPipeLine(line, index + 2);
+    const sourceRow = Object.fromEntries(
+      PIPE_DATASET_HEADERS.map((header, fieldIndex) => [header, values[fieldIndex]]),
+    );
+    const category = categoryByName.get(sourceRow.category);
+    if (!category) {
+      throw new Error(`Pipe dataset line ${index + 2} has unknown category ${sourceRow.category}.`);
+    }
+    return {
+      global_order: sourceRow.global_order,
+      draft_id: sourceRow.draft_id,
+      scenario_id: sourceRow.scenario_id,
+      category: sourceRow.category,
+      expected_min: category.minimum,
+      expected_max: category.maximum,
+      draft_text: sourceRow.draft_text,
+    };
+  });
+}
+
 function normalizedText(text) {
   return text.normalize("NFKC").toLocaleLowerCase("zh-HK").replace(/[\p{P}\p{S}\s]/gu, "");
 }
@@ -187,9 +246,12 @@ function jaccard(left, right) {
   return overlap / (left.size + right.size - overlap);
 }
 
-export function validateDataset(rows) {
+export function validateDataset(rows, { allowQualityWarnings = false } = {}) {
   const errors = [];
   const warnings = [];
+  const qualityIssue = (message) => {
+    (allowQualityWarnings ? warnings : errors).push(message);
+  };
   const expectedCategories = new Map(CATEGORY_CONFIG.map(({ name }) => [name, 0]));
   const seenOrders = new Set();
   const seenDraftIds = new Set();
@@ -243,28 +305,28 @@ export function validateDataset(rows) {
     if (!draft) errors.push(`Row ${index + 2}: draft_text is empty.`);
     if (!/\p{Script=Han}/u.test(draft)) errors.push(`Row ${index + 2}: draft has no Chinese text.`);
     if (/\b(?:Excellent|Good|Normal|Bad|Extremely Bad)\b/iu.test(draft)) {
-      errors.push(`Row ${index + 2}: draft leaks an English quality category.`);
+      qualityIssue(`Row ${index + 2}: draft leaks an English quality category.`);
     }
     if (/(?:expected\s*score|預期分數|85\s*[–-]\s*100|70\s*[–-]\s*84|50\s*[–-]\s*69|30\s*[–-]\s*49|0\s*[–-]\s*29)/iu.test(draft)) {
-      errors.push(`Row ${index + 2}: draft leaks an expected score or range.`);
+      qualityIssue(`Row ${index + 2}: draft leaks an expected score or range.`);
     }
     if (/(?:\[\s*待補\s*\]|\[\s*TBD\s*\]|\bTBD\b|\bXXX\b|Lorem ipsum|<placeholder>)/iu.test(draft)) {
-      errors.push(`Row ${index + 2}: draft contains a placeholder marker.`);
+      qualityIssue(`Row ${index + 2}: draft contains a placeholder marker.`);
     }
     if (/(?:稿件(?:沒有|未有|一下|前後)|資料(?:前後|一處)|另一份表|另一處又|寫得容易|寫法容易|讀落不知|很難記|容易看錯|一開始看不明|沒有時鐘|幾件事一口氣說|之後才提到賽事本身|次序算是這樣安排|優惠先放在公布最前)/u.test(draft)) {
-      errors.push(`Row ${index + 2}: draft contains an artificial self-review cue instead of a natural writing defect.`);
+      qualityIssue(`Row ${index + 2}: draft contains an artificial self-review cue instead of a natural writing defect.`);
     }
     const simplifiedHits = [...new Set(Array.from(draft).filter((character) => simplifiedOnlyCharacters.has(character)))];
     if (simplifiedHits.length > 0) {
-      errors.push(`Row ${index + 2}: possible Simplified Chinese characters: ${simplifiedHits.join("")}.`);
+      qualityIssue(`Row ${index + 2}: possible Simplified Chinese characters: ${simplifiedHits.join("")}.`);
     }
     if (/雷射/u.test(draft)) {
-      errors.push(`Row ${index + 2}: use Hong Kong wording \"激光\" instead of Taiwan-leaning \"雷射\".`);
+      qualityIssue(`Row ${index + 2}: use Hong Kong wording \"激光\" instead of Taiwan-leaning \"雷射\".`);
     }
 
     const normalized = normalizedText(draft);
     if (normalizedDrafts.has(normalized)) {
-      errors.push(`Rows ${normalizedDrafts.get(normalized)} and ${index + 2} contain duplicate draft text.`);
+      qualityIssue(`Rows ${normalizedDrafts.get(normalized)} and ${index + 2} contain duplicate draft text.`);
     } else {
       normalizedDrafts.set(normalized, index + 2);
     }
@@ -288,7 +350,7 @@ export function validateDataset(rows) {
     for (let right = left + 1; right < rows.length; right += 1) {
       const similarity = jaccard(gramSets[left], gramSets[right]);
       if (similarity >= 0.92) {
-        errors.push(
+        qualityIssue(
           `Drafts ${rows[left].draft_id} and ${rows[right].draft_id} are too similar (${(similarity * 100).toFixed(1)}%).`,
         );
       } else if (similarity >= 0.82) {
@@ -302,7 +364,7 @@ export function validateDataset(rows) {
   return { errors, warnings };
 }
 
-export async function loadDataset(datasetPath) {
+export async function loadDataset(datasetPath, { allowQualityWarnings = false } = {}) {
   const buffer = await fs.readFile(datasetPath);
   if (buffer.length < 3 || buffer[0] !== 0xEF || buffer[1] !== 0xBB || buffer[2] !== 0xBF) {
     throw new Error("Dataset CSV must be UTF-8 with BOM.");
@@ -318,11 +380,29 @@ export async function loadDataset(datasetPath) {
     expected_min: Number(row.expected_min),
     expected_max: Number(row.expected_max),
   }));
-  const validation = validateDataset(rows);
+  const validation = validateDataset(rows, { allowQualityWarnings });
   if (validation.errors.length > 0) {
     throw new Error(`Dataset validation failed:\n- ${validation.errors.join("\n- ")}`);
   }
   return { rows, warnings: validation.warnings };
+}
+
+export async function convertPipeDatasetFile(inputPath, outputPath) {
+  const input = await fs.readFile(inputPath, "utf8");
+  const rows = parsePipeDataset(input);
+  const validation = validateDataset(rows, { allowQualityWarnings: true });
+  if (validation.errors.length > 0) {
+    throw new Error(`Pipe dataset validation failed:\n- ${validation.errors.join("\n- ")}`);
+  }
+
+  const resolvedOutputPath = path.resolve(outputPath);
+  await fs.mkdir(path.dirname(resolvedOutputPath), { recursive: true });
+  await fs.writeFile(
+    resolvedOutputPath,
+    serializeCsv(DATASET_HEADERS, rows, { bom: true }),
+    "utf8",
+  );
+  return { outputPath: resolvedOutputPath, rows, warnings: validation.warnings };
 }
 
 export function predictCategory(score) {
@@ -635,6 +715,7 @@ export async function reviewTask(task, options) {
     retryLimit,
     backoffMs,
     modelName,
+    modelId = modelName,
     reviewerSha256 = "",
     rawLogPath,
     fetchImpl = fetch,
@@ -658,7 +739,11 @@ export async function reviewTask(task, options) {
       response = await fetchImpl(`${baseUrl}/api/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draft: task.draft_text, sourceUrl: "" }),
+        body: JSON.stringify({
+          draft: task.draft_text,
+          sourceUrl: "",
+          ...(modelId ? { model: modelId } : {}),
+        }),
         signal: AbortSignal.timeout(timeoutMs),
       });
       responseText = await response.text();

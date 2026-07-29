@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 
-const port = Number(process.env.MOCK_DEEPSEEK_PORT || 4010);
+const port = Number(process.env.MOCK_GROK_PORT || 4010);
 
 const lowReview = {
   overallScore: 41,
@@ -107,7 +107,7 @@ function completion(content, finishReason = "stop") {
         },
       },
     ],
-    model: "deepseek-v4-pro",
+    model: "grok-4.5",
   };
 }
 
@@ -135,20 +135,20 @@ const server = createServer((request, response) => {
     const userContent =
       body.messages?.find((message) => message.role === "user")?.content || "";
 
-    if (!["deepseek-v4-pro", "deepseek-v4-flash"].includes(body.model)) {
-      sendJson(response, 400, {
+    if (body.model !== "grok-4.5") {
+      sendJson(response, 404, {
         error: {
-          message: `The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed ${String(body.model)}.`,
+          message: `The model ${String(body.model)} does not exist or you do not have access to it.`,
           type: "invalid_request_error",
-          code: "invalid_request_error",
+          code: "model_not_found",
         },
       });
       return;
     }
-    if (body.thinking?.type !== "enabled" || body.reasoning_effort !== "max") {
+    if ("thinking" in body || body.reasoning_effort !== "high") {
       sendJson(response, 400, {
         error: {
-          message: "Mock requires thinking.enabled and reasoning_effort=max.",
+          message: "Mock requires reasoning_effort=high and no unsupported thinking field.",
           type: "invalid_request_error",
           code: "invalid_request_error",
         },
@@ -237,7 +237,7 @@ const server = createServer((request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  process.stdout.write("Mock DeepSeek server listening on http://127.0.0.1:" + port + "\n");
+  process.stdout.write("Mock Grok server listening on http://127.0.0.1:" + port + "\n");
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

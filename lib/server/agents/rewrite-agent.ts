@@ -1,4 +1,4 @@
-import { requestDeepSeekCompletion } from "@/lib/server/agents/deepseek-client";
+import { requestModelCompletion } from "@/lib/server/agents/model-client";
 import {
   createQuotationCorrectionPrompt,
   createRewriteValidationCorrectionPrompt,
@@ -31,6 +31,7 @@ import {
   type RewriteContext,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
+import type { SelectableModelId } from "@/lib/shared/models";
 
 const EMPTY_REWRITE_CONTEXT: RewriteContext = {
   history: [],
@@ -536,11 +537,13 @@ function quotationError(
 async function generateCandidate(
   userPrompt: string,
   completionRunner: CompletionRunner,
+  model?: SelectableModelId,
   systemPrompt = REWRITE_SYSTEM_PROMPT,
   temperature = 0.1,
 ) {
   const content = await completionRunner({
     stage: "rewrite_request",
+    model,
     systemPrompt,
     userPrompt,
     responseFormat: "text",
@@ -553,12 +556,14 @@ async function generateCandidate(
 export async function runRewriteAgent(
   source: SourceSnapshot,
   review: ReviewResult,
-  completionRunner: CompletionRunner = requestDeepSeekCompletion,
+  completionRunner: CompletionRunner = requestModelCompletion,
   context: RewriteContext = EMPTY_REWRITE_CONTEXT,
+  model?: SelectableModelId,
 ): Promise<RewriteApiResponse> {
   const firstCandidate = await generateCandidate(
     createRewriteUserPrompt(source, review, context),
     completionRunner,
+    model,
   );
 
   let firstSafetyError: AppError | null = null;
@@ -631,6 +636,7 @@ export async function runRewriteAgent(
     secondCandidate = await generateCandidate(
       correctionPrompt,
       completionRunner,
+      model,
       isQuotationCorrection
         ? QUOTATION_CORRECTION_SYSTEM_PROMPT
         : isSourceFidelityCorrection

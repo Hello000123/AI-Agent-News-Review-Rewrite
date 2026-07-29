@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { SELECTABLE_MODEL_IDS } from "@/lib/shared/models";
+
 export const MAX_DRAFT_CHARS = 50_000;
 export const MAX_REFERENCE_CHARS = 50_000;
 export const MAX_REQUEST_BYTES = 220_000;
@@ -150,10 +152,15 @@ export const imageContextItemSchema = z
   })
   .strict();
 
+export const selectableModelSchema = z.enum(SELECTABLE_MODEL_IDS, {
+  error: "Unsupported AI model. Choose DeepSeek V4 Pro or Grok 4.5.",
+});
+
 export const editorialInputSchema = z
   .object({
     draft: draftTextSchema.default(""),
     sourceUrl: sourceUrlSchema.default(""),
+    model: selectableModelSchema.optional(),
   })
   .strict()
   .refine(
@@ -229,6 +236,7 @@ export const rewriteRequestSchema = rewriteContextSchema
   .extend({
     source: sourceSnapshotSchema,
     review: reviewResultSchema,
+    model: selectableModelSchema.optional(),
   })
   .strict();
 

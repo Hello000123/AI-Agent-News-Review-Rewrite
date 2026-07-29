@@ -1,7 +1,8 @@
 import { z } from "zod";
 
-import { getServerConfig, type ServerConfig } from "@/lib/server/config";
+import { getDeepSeekServerConfig, type ServerConfig } from "@/lib/server/config";
 import { AppError } from "@/lib/server/errors";
+import type { SelectableModelId } from "@/lib/shared/models";
 
 const PROVIDER = "DeepSeek";
 
@@ -14,7 +15,7 @@ const completionResponseSchema = z
           message: z
             .object({
               content: z.string().nullable(),
-              // Deliberately validate but never return or log private reasoning.
+              // Ignore any provider-specific reasoning field if one is returned.
               reasoning_content: z.string().nullable().optional(),
             })
             .passthrough(),
@@ -33,7 +34,7 @@ const streamChunkSchema = z
           delta: z
             .object({
               content: z.string().nullable().optional(),
-              // DeepSeek sends thinking tokens here. They are intentionally discarded.
+              // Ignore any provider-specific reasoning field if one is returned.
               reasoning_content: z.string().nullable().optional(),
             })
             .passthrough(),
@@ -47,12 +48,13 @@ export type CompletionStage = "review_request" | "rewrite_request";
 
 export interface CompletionRequest {
   stage: CompletionStage;
+  model?: SelectableModelId;
   systemPrompt: string;
   userPrompt: string;
   responseFormat: "json" | "text";
   maxTokens: number;
-  // Retained for custom completion runners. DeepSeek ignores temperature in
-  // thinking mode, so the provider request intentionally omits it.
+  // Retained for custom completion runners. The DeepSeek request intentionally
+  // omits sampling controls while using high reasoning effort.
   temperature?: number;
 }
 
@@ -70,8 +72,12 @@ function safeModelIdentifier(model: string) {
   return /^[a-zA-Z0-9._:/-]{1,120}$/u.test(model) ? model : "[invalid model identifier]";
 }
 
+function effectiveModel(request: Pick<CompletionRequest, "model">, config: ServerConfig) {
+  return request.model ?? config.model;
+}
+
 function diagnosticDetails(
-  request: Pick<CompletionRequest, "stage">,
+  request: Pick<CompletionRequest, "stage" | "model">,
   config: ServerConfig,
   httpStatus: number,
   causeSummary: string,
@@ -80,7 +86,7 @@ function diagnosticDetails(
   return {
     stage: request.stage,
     provider: PROVIDER,
-    model: safeModelIdentifier(config.model),
+    model: safeModelIdentifier(effectiveModel(request, config)),
     httpStatus,
     causeSummary,
     retryable,
@@ -92,12 +98,24 @@ export function deepSeekPublicDiagnostics(
   httpStatus: number,
   causeSummary: string,
   retryable: boolean,
+  model?: SelectableModelId,
 ) {
-  return diagnosticDetails({ stage }, getServerConfig(), httpStatus, causeSummary, retryable);
+  return diagnosticDetails(
+    { stage, model },
+    getDeepSeekServerConfig(),
+    httpStatus,
+    causeSummary,
+    retryable,
+  );
 }
 
-function providerCause(status: number, rawBody: string, config: ServerConfig) {
-  const safeModel = safeModelIdentifier(config.model);
+function providerCause(
+  status: number,
+  rawBody: string,
+  request: CompletionRequest,
+  config: ServerConfig,
+) {
+  const safeModel = safeModelIdentifier(effectiveModel(request, config));
   let providerMessage = "";
   try {
     const parsed = JSON.parse(rawBody) as {
@@ -105,25 +123,32 @@ function providerCause(status: number, rawBody: string, config: ServerConfig) {
       message?: unknown;
     };
     const candidate = parsed.error?.message ?? parsed.message;
+    const code = parsed.error?.code;
     if (typeof candidate === "string") providerMessage = candidate.toLowerCase();
+    if (typeof code === "string") providerMessage += ` ${code.toLowerCase()}`;
   } catch {
     // Non-JSON upstream bodies are never copied into a public error.
   }
 
-  if (status === 401 || status === 403) return "DeepSeek rejected the API credentials.";
+  if (status === 401) return "DeepSeek rejected the API credentials.";
+  if (status === 403) return "DeepSeek denied access for the API key or team.";
   if (status === 402) return "The DeepSeek account has insufficient balance.";
   if (status === 408) return "DeepSeek timed out before accepting the request.";
-  if (status === 429) return "The DeepSeek account or model concurrency limit was reached.";
+  if (status === 429) return "The DeepSeek account or model rate limit was reached.";
   if (
-    (status === 400 || status === 422) &&
-    (providerMessage.includes("supported api model names") ||
-      providerMessage.includes("model_not_found") ||
-      providerMessage.includes("model not found"))
+    (status === 400 || status === 404 || status === 422) &&
+    (providerMessage.includes("model_not_found") ||
+      providerMessage.includes("model not found") ||
+      providerMessage.includes("model does not exist") ||
+      (status === 404 && providerMessage.includes("model")))
   ) {
-    return `DeepSeek rejected configured model ${safeModel}. Supported model IDs are deepseek-v4-pro and deepseek-v4-flash.`;
+    return `DeepSeek could not find selected model ${safeModel}. Verify that this API key can access ${safeModel}.`;
+  }
+  if (status === 404) {
+    return "DeepSeek could not find the configured model or API endpoint.";
   }
   if (status === 400 || status === 422) {
-    return "DeepSeek rejected the configured model or one or more request parameters.";
+    return "DeepSeek rejected one or more request parameters.";
   }
   if (status >= 500) return "DeepSeek reported a temporary service or inference failure.";
   return `DeepSeek returned HTTP ${status} without a usable completion.`;
@@ -135,7 +160,7 @@ function upstreamError(
   request: CompletionRequest,
   config: ServerConfig,
 ) {
-  const causeSummary = providerCause(status, rawBody, config);
+  const causeSummary = providerCause(status, rawBody, request, config);
   const publicDetails = diagnosticDetails(
     request,
     config,
@@ -147,7 +172,7 @@ function upstreamError(
   if (status === 401 || status === 403) {
     return new AppError(
       "DEEPSEEK_AUTH_ERROR",
-      "DeepSeek rejected the API credentials. Check DEEPSEEK_API_KEY and try again.",
+      "DeepSeek rejected the API credentials or permissions. Check DEEPSEEK_API_KEY and its model access.",
       502,
       { publicDetails },
     );
@@ -168,13 +193,13 @@ function upstreamError(
       { publicDetails },
     );
   }
-  if (status === 400 || status === 422) {
-    const invalidModel = causeSummary.includes("Supported model IDs");
+  if (status === 400 || status === 404 || status === 422) {
+    const invalidModel = causeSummary.includes("Verify that this API key can access");
     return new AppError(
       invalidModel ? "DEEPSEEK_MODEL_ERROR" : "DEEPSEEK_REQUEST_REJECTED",
       invalidModel
-        ? "DeepSeek rejected the configured model. Correct the server model setting and try again."
-        : "DeepSeek rejected the configured model or request parameters. Check the server configuration and try again.",
+        ? "DeepSeek could not access the selected model. Check the model and API-key permissions."
+        : "DeepSeek rejected the configured model, endpoint, or request parameters. Check the server configuration.",
       502,
       { publicDetails },
     );
@@ -408,7 +433,7 @@ export async function requestDeepSeekCompletion(
   request: CompletionRequest,
   dependencies: DeepSeekDependencies = {},
 ) {
-  const config = dependencies.config ?? getServerConfig();
+  const config = dependencies.config ?? getDeepSeekServerConfig();
   const fetchImpl = dependencies.fetchImpl ?? fetch;
 
   if (!config.apiKey) {
@@ -431,13 +456,12 @@ export async function requestDeepSeekCompletion(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
   const body: Record<string, unknown> = {
-    model: config.model,
+    model: effectiveModel(request, config),
     messages: [
       { role: "system", content: request.systemPrompt },
       { role: "user", content: request.userPrompt },
     ],
-    thinking: { type: "enabled" },
-    reasoning_effort: "max",
+    reasoning_effort: "high",
     max_tokens: request.maxTokens,
     stream: config.streamResponses,
   };

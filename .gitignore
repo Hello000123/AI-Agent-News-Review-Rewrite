@@ -9,6 +9,11 @@ out/
 coverage/
 *.tsbuildinfo
 
+# Calibration datasets and reports are intentionally versioned
+!tests/chinese-review-calibration/*.csv
+!tests/chinese-review-calibration/*.jsonl
+!tests/chinese-review-calibration/*.xlsx
+
 # Environment files and API keys
 .env
 .env.*
@@ -22,6 +27,9 @@ pnpm-debug.log*
 
 # Local deployment settings
 .vercel/
+.open-next/
+.wrangler/
+.dev.vars
 
 # Editor and operating-system files
 .vscode/

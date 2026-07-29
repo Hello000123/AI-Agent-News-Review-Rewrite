@@ -4,7 +4,7 @@ PressReady is a focused local website for one workflow:
 
     Text or public URL → Review Agent → Calibrated score and feedback → Explicit rewrite → Validated news report
 
-The Review Agent scores the submitted copy once and returns a structured assessment. Rewriting never starts automatically and is never skipped because a review score is high: after either a high or low score, the user can explicitly request a Rewrite Agent call or return to the source input. The rewrite uses the immutable source snapshot that produced the displayed review. After the first rewrite, `Rewrite with AI Again` opens optional concise/more-detailed controls and an improvement-instructions field before another request is made.
+The Review Agent scores the submitted copy once and returns a structured assessment. Rewriting never starts automatically and is never skipped because a review score is high: after either a high or low score, the user can explicitly request a Rewrite Agent call or return to the source input. The rewrite uses the immutable source snapshot that produced the displayed review. A model button lets the user choose DeepSeek V4 Pro or Grok 4.5 for the article; both run with high reasoning. After the first rewrite, `Rewrite with AI Again` opens optional concise/more-detailed controls and an improvement-instructions field before another request is made.
 
 The project is intentionally limited to this workflow. It has no login, database, account-level history, news search, dark theme, publishing, distribution, or scheduled work. The active article and its successful rewrite turns are retained in tab-scoped `sessionStorage` so a same-tab reload can continue the current editing session; starting a new draft or changing the source clears that history. Rewrites automatically preserve the primary input language and Chinese script: English input stays English, while Traditional or Simplified Chinese input stays in the detected Chinese script.
 
@@ -14,11 +14,11 @@ The project is intentionally limited to this workflow. It has no login, database
 - TypeScript with strict checking
 - Next.js route handlers for server-only API access
 - Zod for request and AI-response validation
-- Native server-side fetch for DeepSeek
+- Native server-side fetch for the DeepSeek and xAI APIs
 - Plain responsive CSS
 - Vitest for unit and route-level tests
 
-No DeepSeek SDK, UI framework, database, or separate Express server is required.
+No provider SDK, UI framework, database, or separate Express server is required.
 
 ## Folder structure
 
@@ -35,7 +35,7 @@ No DeepSeek SDK, UI framework, database, or separate Express server is required.
       output-panel.tsx              Final output and actions
     lib/
       client/api.ts             Safe browser-to-backend requests
-      server/agents/            DeepSeek client, prompts, agents, workflow, quotation validation
+      server/agents/            Provider clients, routing, prompts, agents, workflow, quotation validation
       server/sources/           Bounded public-URL retrieval and source extraction
       server/config.ts          Environment configuration
       server/errors.ts          Safe typed errors
@@ -44,7 +44,7 @@ No DeepSeek SDK, UI framework, database, or separate Express server is required.
     tests/
       fixtures/                 Review and rewrite evaluation fixtures
       *.test.ts                 Unit and API validation tests
-      mock-deepseek-server.mjs  Local browser-test provider
+      mock-grok-server.mjs      Local browser-test provider
       live-review-evaluation.mjs   Repeatable live review scoring harness
       live-rewrite-evaluation.mjs  Repeatable live rewrite harness
     .env.example
@@ -56,7 +56,8 @@ Requirements:
 
 - Node.js 22.13 or newer
 - npm
-- A DeepSeek API key for live requests
+- A DeepSeek API key with access to DeepSeek V4 Pro
+- An xAI API key with access to Grok 4.5
 
 From PowerShell:
 
@@ -64,7 +65,7 @@ From PowerShell:
     npm install
     Copy-Item .env.example .env.local
 
-Open .env.local and add the API key. Never commit that file.
+Open .env.local and add both provider keys. Never commit that file.
 
 ## Environment variables
 
@@ -72,45 +73,49 @@ Required:
 
 | Variable | Example | Purpose |
 | --- | --- | --- |
+| XAI_API_KEY | your-key | Server-only xAI credential |
 | DEEPSEEK_API_KEY | your-key | Server-only DeepSeek credential |
-| DEEPSEEK_MODEL | deepseek-v4-pro | Model used by both agents |
+| AI_MODEL | grok-4.5 | Initial website model; must be `grok-4.5` or `deepseek-v4-pro` |
 | REVIEW_PASS_SCORE | 80 | Overall score used to label a review as passing |
 
 Optional server settings:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| DEEPSEEK_API_BASE_URL | https://api.deepseek.com | DeepSeek base URL; useful for isolated mock testing |
-| DEEPSEEK_TIMEOUT_MS | 600000 | Per-completion abort timeout in milliseconds, from 1,000 to 600,000 |
-| DEEPSEEK_STREAM | true | Stream the provider response so long reasoning remains active; `false` keeps the supported non-streaming parser |
+| XAI_API_BASE_URL | https://api.x.ai/v1 | xAI base URL; useful for isolated mock testing |
+| XAI_TIMEOUT_MS | 600000 | Per-completion abort timeout in milliseconds, from 1,000 to 600,000 |
+| XAI_STREAM | true | Stream the provider response so long reasoning remains active; `false` keeps the supported non-streaming parser |
+| DEEPSEEK_API_BASE_URL | https://api.deepseek.com | DeepSeek OpenAI-compatible base URL |
+| DEEPSEEK_TIMEOUT_MS | 600000 | Per-completion DeepSeek timeout in milliseconds |
+| DEEPSEEK_STREAM | true | Stream DeepSeek responses; `false` uses the non-streaming parser |
 
 Invalid pass scores fall back to 80. Invalid timeouts fall back to 600 seconds. Invalid stream values fall back to `true`. Restart the development server after changing environment variables.
 
-## DeepSeek API configuration
+## AI provider configuration
 
-As of July 16, 2026, the official OpenAI-compatible endpoint is:
+As of July 27, 2026, this project uses stateless OpenAI-compatible Chat Completions endpoints:
 
+    POST https://api.x.ai/v1/chat/completions
     POST https://api.deepseek.com/chat/completions
 
-The current project configuration uses the official `deepseek-v4-pro` model ID for both agents. The authenticated `GET https://api.deepseek.com/models` endpoint lists both `deepseek-v4-pro` and `deepseek-v4-flash`; the application never silently falls back if the configured model is rejected.
+The website offers an allowlisted per-article choice between `deepseek-v4-pro` and `grok-4.5`. `AI_MODEL` sets the initial choice when it matches one of those IDs; otherwise the picker starts on `grok-4.5`. The selected model is validated by the backend and routed only to its matching provider for both review and rewrite requests. Arbitrary browser-supplied model identifiers, including `grok-4.3`, are rejected before any provider request.
 
-Both calls explicitly enable thinking and select the highest documented effort:
+Both selectable models explicitly use the highest supported reasoning level:
 
-    thinking: { "type": "enabled" }
-    reasoning_effort: "max"
+    reasoning_effort: "high"
 
-DeepSeek returns private thinking in `reasoning_content` and the final answer in `content`. The server discards `reasoning_content` and exposes only the final answer. Upstream streaming is enabled by default and parses `delta.reasoning_content`, `delta.content`, keep-alive comments, and `[DONE]`; non-streaming `message.reasoning_content`/`message.content` responses remain supported. The review call enables JSON Output and validates the result with a strict schema. The rewrite call requests normal text. Both use a 64,000-token completion budget so maximum-effort reasoning has room to finish before the final answer.
+Chat Completions returns only the model's final answer; the application does not expose a reasoning trace. Upstream streaming is enabled by default and parses content deltas, finish reasons, keep-alive comments, usage-only events, and `[DONE]`; the non-streaming response shape remains supported. The review call requests a JSON object and validates every field with a strict Zod schema. The rewrite call requests normal text. Both allow up to 64,000 output tokens so high-effort reasoning and long source material have room to complete.
 
 Official references:
 
-- [DeepSeek quick start](https://api-docs.deepseek.com/)
-- [Chat Completions reference](https://api-docs.deepseek.com/api/create-chat-completion/)
-- [Available models endpoint](https://api-docs.deepseek.com/api/list-models/)
-- [Thinking mode and effort control](https://api-docs.deepseek.com/guides/thinking_mode/)
-- [Rate limits and keep-alive behavior](https://api-docs.deepseek.com/quick_start/rate_limit/)
-- [Models and pricing](https://api-docs.deepseek.com/quick_start/pricing/)
-- [JSON Output guide](https://api-docs.deepseek.com/guides/json_mode/)
-- [Error codes](https://api-docs.deepseek.com/quick_start/error_codes/)
+- [Grok 4.5 overview](https://docs.x.ai/developers/models/grok-4.5)
+- [DeepSeek models and pricing](https://api-docs.deepseek.com/quick_start/pricing)
+- [DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion)
+- [Reasoning effort](https://docs.x.ai/developers/model-capabilities/text/reasoning)
+- [Streaming](https://docs.x.ai/developers/model-capabilities/text/streaming)
+- [Structured outputs](https://docs.x.ai/developers/model-capabilities/text/structured-outputs)
+- [Models](https://docs.x.ai/developers/models)
+- [Debugging API errors](https://docs.x.ai/developers/debugging)
 
 ## Development
 
@@ -125,7 +130,7 @@ hostname so the Next.js client bundle and hot-reload connection can hydrate on
 LAN clients. Restart the server after changing networks or receiving a new IP
 address, and allow Node.js through the Windows firewall when prompted.
 
-The browser sends only the submitted text and public source URL to the local Next.js backend. The interface does not accept picture uploads or user-supplied image captions/OCR because DeepSeek V4 is text-only in this workflow. The backend retrieves public URL content, derives the rewrite language from the primary article, and calls DeepSeek with the server-only secret key. The key is never included in browser source, browser requests, API error bodies, or application logs.
+The browser sends only the submitted text, public source URL, and allowlisted model ID to the local Next.js backend. This workflow is intentionally text-only and does not accept picture uploads or user-supplied image captions/OCR. The backend retrieves public URL content, derives the rewrite language from the primary article, and calls only the selected model's provider with its matching server-only secret key. Provider keys are never included in browser source, browser requests, API error bodies, or application logs.
 
 ## Production build
 
@@ -199,7 +204,7 @@ User drafts, retrieved source material, and feedback are wrapped as JSON data in
 
 Each validated rewrite is appended chronologically as `{ rewrittenText, lengthOption, instruction }`. On the next request, the last turn is labelled as the current rewritten version and earlier turns remain ordered, so later instructions build on the same article instead of starting an independent model call. The server remains stateless: the browser sends this context with each rewrite request.
 
-The stable current article state is stored under one versioned `sessionStorage` key. This survives same-tab refreshes and same-tab navigation, but not the end of the browser-tab session. Editing the source, submitting a new review, or choosing `Start New Draft` clears it. Malformed stored data and storage failures are ignored safely.
+The stable current article state, including its selected model, is stored under one versioned `sessionStorage` key. This survives same-tab refreshes and same-tab navigation, but not the end of the browser-tab session. Editing the source, changing the model, submitting a new review, or choosing `Start New Draft` clears stale rewrite history. A model change marks the displayed review as stale until the article is reviewed again. Malformed stored data and storage failures are ignored safely.
 
 Rewrite requests retain up to 24 successful turns. If a request approaches the 220 KB body limit, older rewritten version bodies are omitted from the request from oldest to newest while their instructions and preferences remain; the original source, active system rules, all retained user instructions, and the newest/current rewrite take priority.
 
@@ -265,14 +270,14 @@ The unit and component suites cover:
 The bundled mock provider is for local QA only. Run it in one PowerShell window:
 
     cd "C:\AI\AI-Agent-News-Review-Rewrite"
-    npm run mock:deepseek
+    npm run mock:grok
 
 Run the site in another window:
 
     cd "C:\AI\AI-Agent-News-Review-Rewrite"
-    $env:DEEPSEEK_API_KEY="local-test-key"
-    $env:DEEPSEEK_API_BASE_URL="http://127.0.0.1:4010"
-    $env:DEEPSEEK_TIMEOUT_MS="1000"
+    $env:XAI_API_KEY="local-test-key"
+    $env:XAI_API_BASE_URL="http://127.0.0.1:4010"
+    $env:XAI_TIMEOUT_MS="1000"
     npm run dev
 
 Useful mock inputs:
@@ -303,7 +308,7 @@ Run the Rewrite Agent fidelity set:
 
 Set `LIVE_EVAL_IDS` to a comma-separated subset and `LIVE_EVAL_BASE_URL` when the site is not on `http://127.0.0.1:3000`. The harness counts every request and checks traceability, exact quotations, required terms, new numbers or placeholders, prohibited boilerplate, outlet attribution, markdown, and the headline/body format. It never prints credentials.
 
-These commands provide a repeatable basis for before/after or Flash/Pro comparison. The earlier Flash baseline on 16 July 2026 used disabled thinking and a smaller output budget; it is historical evidence, not the current production configuration. Current runs record `deepseek-v4-pro`, enabled thinking, `reasoning_effort: max`, upstream streaming, and a 64,000-token completion budget. The rewrite harness exercises the production route and its bounded retry behavior. Provider outputs can still vary, so recorded results are not a permanent quality guarantee.
+These commands provide a repeatable basis for before/after or model-version comparisons. Current runs record `grok-4.5`, `reasoning_effort: high`, upstream streaming, and a 64,000-token output budget. The rewrite harness exercises the production route and its bounded retry behavior. Provider outputs can still vary, so recorded results are not a permanent quality guarantee.
 
 ## Editorial research basis
 
@@ -319,28 +324,29 @@ The news-editor prompt uses only shared, high-level principles—accuracy, conci
 - Drafts are limited to 50,000 characters.
 - Public source URLs are limited to 2,048 characters and must resolve only to public internet addresses.
 - Review requests accept a draft, a public source URL, or both; picture upload and user-supplied image-text fields are rejected.
+- Browser requests may select only `deepseek-v4-pro` or `grok-4.5`; both use high reasoning.
 - Public page retrieval defaults to an 8-second timeout, three redirects, and 1.5 MB of response bytes before bounded text extraction.
 - API request bodies are limited to 220,000 bytes.
 - The active article, review, and successful rewrite turns are stored only in tab-scoped browser `sessionStorage`; there is no server database or account-level history. Source changes and `Start New Draft` clear the stored session.
-- Submitted copy and retrieved text are sent to DeepSeek for processing and are therefore subject to DeepSeek account terms and data handling.
+- Submitted copy and retrieved text are sent to the selected provider and are subject to that provider's terms and data handling.
 
 ## Troubleshooting
 
 ### The server says the API key is not configured
 
-Confirm DEEPSEEK_API_KEY is set in .env.local and restart the server. Do not place the key in a NEXT_PUBLIC variable.
+Confirm the key for the selected model (`XAI_API_KEY` or `DEEPSEEK_API_KEY`) is set in .env.local and restart the server. Do not place either key in a NEXT_PUBLIC variable.
 
-### DeepSeek rejects the credentials
+### A provider rejects the credentials
 
-Check that the key is active and copied without surrounding quotation marks. The site reports this as DEEPSEEK_AUTH_ERROR without exposing provider details.
+Check that the matching provider key is active and copied without surrounding quotation marks. The site reports a provider-specific authentication error without exposing credentials.
 
 ### The request times out
 
-Retry with a shorter draft or check DeepSeek service availability. Maximum-effort Pro requests stream upstream and may legitimately take several minutes; the default timeout is the provider's documented ten-minute queue window, and the interface shows live elapsed time while it waits.
+Retry with a shorter draft or check the selected provider's service availability. High-reasoning requests stream upstream and may legitimately take several minutes; the server timeout defaults to ten minutes, and the interface shows live elapsed time while it waits.
 
 ### The model is rejected
 
-Use a model identifier currently available to your DeepSeek account. The verified project default is `deepseek-v4-pro`. A rejected model now reports the workflow stage, provider, configured model, upstream HTTP status, and a sanitized cause without exposing credentials or provider reasoning.
+The website accepts only `deepseek-v4-pro` and `grok-4.5`, with `grok-4.5` as the project default. Unsupported identifiers are rejected before routing. A provider-side rejection reports the workflow stage, provider, selected model, upstream HTTP status, and a sanitized cause without exposing credentials or provider reasoning.
 
 ### The Review Agent returns invalid JSON
 
@@ -371,8 +377,21 @@ Then open [http://localhost:3001](http://localhost:3001).
 
 ## Remaining operational limitations
 
-A live DeepSeek success request requires a user-supplied API key and may incur provider charges. Some public sites may block or render content in a way that prevents bounded server-side extraction.
+A live success request requires a user-supplied key for the selected provider and may incur provider charges. Some public sites may block or render content in a way that prevents bounded server-side extraction.
 
 Hostname addresses are checked before each fetch and redirect, but native `fetch` performs its own subsequent DNS resolution; the validated address is not pinned to the connection. A hostile domain could therefore attempt DNS rebinding in that time-of-check/time-of-use window. Use a resolver-pinning egress proxy before treating public-URL retrieval as a hardened fetcher for fully adversarial URLs.
 
-DeepSeek V4 is text-only in this workflow, so the application does not offer picture upload, visual analysis, or user-supplied image OCR/caption inputs. Quotation classification, Chinese person-name extraction, and named-speaker proximity detection are deliberately conservative heuristics, and provider output remains probabilistic. Deterministic checks cover exact quotations, high-confidence named attribution beside them, extracted source-script names, figures, mixed-language terms, format, and output language, but a human editor must still verify full semantic fidelity, ambiguous or indirect attribution, units, and publication readiness.
+Although the supported providers may offer multimodal models, this application sends text only and does not offer picture upload, visual analysis, or user-supplied image OCR/caption inputs. Quotation classification, Chinese person-name extraction, and named-speaker proximity detection are deliberately conservative heuristics, and provider output remains probabilistic. Deterministic checks cover exact quotations, high-confidence named attribution beside them, extracted source-script names, figures, mixed-language terms, format, and output language, but a human editor must still verify full semantic fidelity, ambiguous or indirect attribution, units, and publication readiness.
+
+## Accounts and Cloudflare deployment
+
+The review/rewrite workspace now requires an approved client or employee
+session. Account requests, employee approval/rejection, single-use password
+setup, login, RBAC, CSRF-protected APIs, and server-side logout use Cloudflare
+D1 and Worker-compatible Web Crypto. The employee approval portal is available
+only to the `employee` role.
+
+See [Accounts, authentication, and Cloudflare deployment](docs/AUTHENTICATION.md)
+for the schema, environment variables, local migration and first-employee
+commands, email-provider envelope, deployment steps, security controls, test
+coverage, and current limitations.

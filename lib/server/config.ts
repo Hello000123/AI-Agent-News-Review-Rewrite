@@ -1,3 +1,11 @@
+import {
+  DEFAULT_SELECTABLE_MODEL,
+  isSelectableModelId,
+  type SelectableModelId,
+} from "@/lib/shared/models";
+
+export const DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1";
+export const DEFAULT_XAI_MODEL = "grok-4.5";
 export const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro";
 export const DEFAULT_REVIEW_PASS_SCORE = 80;
@@ -24,6 +32,14 @@ export function getReviewPassScore() {
   return integerInRange(process.env.REVIEW_PASS_SCORE, DEFAULT_REVIEW_PASS_SCORE, 0, 100);
 }
 
+export function getWebsiteDefaultModel(): SelectableModelId {
+  const configuredModel =
+    process.env.AI_MODEL?.trim() ||
+    process.env.XAI_MODEL?.trim() ||
+    DEFAULT_SELECTABLE_MODEL;
+  return isSelectableModelId(configuredModel) ? configuredModel : DEFAULT_SELECTABLE_MODEL;
+}
+
 function booleanSetting(rawValue: string | undefined, fallback: boolean) {
   if (!rawValue?.trim()) return fallback;
   if (rawValue.trim().toLowerCase() === "true") return true;
@@ -31,26 +47,51 @@ function booleanSetting(rawValue: string | undefined, fallback: boolean) {
   return fallback;
 }
 
-function normalizeBaseUrl(rawValue: string | undefined) {
-  const candidate = rawValue?.trim() || DEFAULT_DEEPSEEK_BASE_URL;
+function normalizeBaseUrl(rawValue: string | undefined, fallback: string) {
+  const candidate = rawValue?.trim() || fallback;
   try {
     const url = new URL(candidate);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
-      return DEFAULT_DEEPSEEK_BASE_URL;
+      return fallback;
     }
     return url.toString().replace(/\/+$/, "");
   } catch {
-    return DEFAULT_DEEPSEEK_BASE_URL;
+    return fallback;
   }
 }
 
-export function getServerConfig(): ServerConfig {
+export function getXaiServerConfig(): ServerConfig {
   return {
-    apiKey: process.env.DEEPSEEK_API_KEY?.trim() || "",
-    apiBaseUrl: normalizeBaseUrl(process.env.DEEPSEEK_API_BASE_URL),
-    model: process.env.DEEPSEEK_MODEL?.trim() || DEFAULT_DEEPSEEK_MODEL,
+    apiKey: process.env.XAI_API_KEY?.trim() || "",
+    apiBaseUrl: normalizeBaseUrl(process.env.XAI_API_BASE_URL, DEFAULT_XAI_BASE_URL),
+    model: DEFAULT_XAI_MODEL,
     passScore: getReviewPassScore(),
-    timeoutMs: integerInRange(process.env.DEEPSEEK_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 600_000),
-    streamResponses: booleanSetting(process.env.DEEPSEEK_STREAM, DEFAULT_STREAM_RESPONSES),
+    timeoutMs: integerInRange(process.env.XAI_TIMEOUT_MS, DEFAULT_TIMEOUT_MS, 1_000, 600_000),
+    streamResponses: booleanSetting(process.env.XAI_STREAM, DEFAULT_STREAM_RESPONSES),
   };
 }
+
+export function getDeepSeekServerConfig(): ServerConfig {
+  return {
+    apiKey: process.env.DEEPSEEK_API_KEY?.trim() || "",
+    apiBaseUrl: normalizeBaseUrl(
+      process.env.DEEPSEEK_API_BASE_URL,
+      DEFAULT_DEEPSEEK_BASE_URL,
+    ),
+    model: DEFAULT_DEEPSEEK_MODEL,
+    passScore: getReviewPassScore(),
+    timeoutMs: integerInRange(
+      process.env.DEEPSEEK_TIMEOUT_MS,
+      DEFAULT_TIMEOUT_MS,
+      1_000,
+      600_000,
+    ),
+    streamResponses: booleanSetting(
+      process.env.DEEPSEEK_STREAM,
+      DEFAULT_STREAM_RESPONSES,
+    ),
+  };
+}
+
+// Retained for existing xAI-specific imports and tests.
+export const getServerConfig = getXaiServerConfig;

@@ -1,8 +1,8 @@
 import {
-  deepSeekPublicDiagnostics,
-  requestDeepSeekCompletion,
+  modelPublicDiagnostics,
+  requestModelCompletion,
   type CompletionRequest,
-} from "@/lib/server/agents/deepseek-client";
+} from "@/lib/server/agents/model-client";
 import {
   createReviewSystemPrompt,
   createReviewUserPrompt,
@@ -17,6 +17,7 @@ import {
   type ReviewFinding,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
+import type { SelectableModelId } from "@/lib/shared/models";
 
 export type CompletionRunner = (request: CompletionRequest) => Promise<string>;
 
@@ -216,7 +217,11 @@ function applyScoreCaps(review: ParsedReview) {
   return { cap, reasons };
 }
 
-export function parseReviewResponse(content: string, passScore: number): ReviewResult {
+export function parseReviewResponse(
+  content: string,
+  passScore: number,
+  model?: SelectableModelId,
+): ReviewResult {
   let rawReview: unknown;
   try {
     rawReview = JSON.parse(content);
@@ -227,11 +232,12 @@ export function parseReviewResponse(content: string, passScore: number): ReviewR
       502,
       {
         cause: error,
-        publicDetails: deepSeekPublicDiagnostics(
+        publicDetails: modelPublicDiagnostics(
           "review_request",
           200,
-          "DeepSeek's final answer was not valid review JSON.",
+          "The selected model's final answer was not valid review JSON.",
           true,
+          model,
         ),
       },
     );
@@ -244,11 +250,12 @@ export function parseReviewResponse(content: string, passScore: number): ReviewR
       "The Review Agent returned an incomplete assessment. Please try the review again.",
       502,
       {
-        publicDetails: deepSeekPublicDiagnostics(
+        publicDetails: modelPublicDiagnostics(
           "review_request",
           200,
-          "DeepSeek's final JSON answer did not match the required review schema.",
+          "The selected model's final JSON answer did not match the required review schema.",
           true,
+          model,
         ),
       },
     );
@@ -272,10 +279,12 @@ export function parseReviewResponse(content: string, passScore: number): ReviewR
 export async function runReviewAgent(
   source: SourceSnapshot | string,
   passScore: number,
-  completionRunner: CompletionRunner = requestDeepSeekCompletion,
+  completionRunner: CompletionRunner = requestModelCompletion,
+  model?: SelectableModelId,
 ) {
   const content = await completionRunner({
     stage: "review_request",
+    model,
     systemPrompt: createReviewSystemPrompt(passScore),
     userPrompt: createReviewUserPrompt(source),
     responseFormat: "json",
@@ -285,5 +294,5 @@ export async function runReviewAgent(
     temperature: 0,
   });
 
-  return parseReviewResponse(content, passScore);
+  return parseReviewResponse(content, passScore, model);
 }

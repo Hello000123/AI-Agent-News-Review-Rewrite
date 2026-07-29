@@ -1,5 +1,6 @@
 import { hostname, networkInterfaces } from "node:os";
 
+import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 import type { NextConfig } from "next";
 
 function localDevelopmentOrigins() {
@@ -28,6 +29,38 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "same-origin" },
+          {
+            key: "Permissions-Policy",
+            value: "camera=(), microphone=(), geolocation=(), payment=()",
+          },
+        ],
+      },
+      {
+        source: "/",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+          { key: "Pragma", value: "no-cache" },
+        ],
+      },
+      {
+        source: "/employee/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+          { key: "Pragma", value: "no-cache" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
+
+initOpenNextCloudflareForDev();

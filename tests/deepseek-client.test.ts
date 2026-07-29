@@ -17,6 +17,7 @@ const config: ServerConfig = {
 
 const reviewRequest: CompletionRequest = {
   stage: "review_request",
+  model: "deepseek-v4-pro",
   systemPrompt: "Return valid JSON.",
   userPrompt: "Review this draft.",
   responseFormat: "json",
@@ -81,7 +82,7 @@ function streamingResponse() {
 describe("DeepSeek client", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("sends the verified V4 Pro maximum-thinking streaming request without leaking the key", async () => {
+  it("sends a DeepSeek V4 Pro high-reasoning streaming request without leaking the key", async () => {
     const fetchMock = vi.fn().mockResolvedValue(streamingResponse());
 
     const content = await requestDeepSeekCompletion(reviewRequest, {
@@ -103,11 +104,11 @@ describe("DeepSeek client", () => {
       model: "deepseek-v4-pro",
       stream: true,
       stream_options: { include_usage: true },
-      thinking: { type: "enabled" },
-      reasoning_effort: "max",
+      reasoning_effort: "high",
       max_tokens: 64_000,
       response_format: { type: "json_object" },
     });
+    expect(body).not.toHaveProperty("thinking");
     expect(body).not.toHaveProperty("temperature");
     expect(String(init.body)).not.toContain("test-secret-key");
   });
@@ -129,6 +130,25 @@ describe("DeepSeek client", () => {
     expect(body).toMatchObject({ stream: false });
     expect(body).not.toHaveProperty("stream_options");
     expect(body).not.toHaveProperty("response_format");
+  });
+
+  it("uses the validated DeepSeek model selection instead of a stale config value", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse("Final answer."));
+
+    await requestDeepSeekCompletion(
+      reviewRequest,
+      {
+        config: { ...config, model: "stale-model", streamResponses: false },
+        fetchImpl: fetchMock as unknown as typeof fetch,
+      },
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      model: "deepseek-v4-pro",
+      reasoning_effort: "high",
+    });
   });
 
   it("fails before making a request when the API key is absent", async () => {
@@ -157,13 +177,12 @@ describe("DeepSeek client", () => {
       new Response(
         JSON.stringify({
           error: {
-            message:
-              "The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed invalid-model-diagnostic.",
+            message: "The model invalid-model-diagnostic does not exist or you do not have access to it.",
             type: "invalid_request_error",
-            code: "invalid_request_error",
+            code: "model_not_found",
           },
         }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
+        { status: 404, headers: { "Content-Type": "application/json" } },
       ),
     );
 
@@ -183,10 +202,10 @@ describe("DeepSeek client", () => {
       publicDetails: {
         stage: "review_request",
         provider: "DeepSeek",
-        model: "invalid-model-diagnostic",
-        httpStatus: 400,
+        model: "deepseek-v4-pro",
+        httpStatus: 404,
         retryable: false,
-        causeSummary: expect.stringContaining("Supported model IDs"),
+        causeSummary: expect.stringContaining("access deepseek-v4-pro"),
       },
     });
     const serialized = JSON.stringify(failure);

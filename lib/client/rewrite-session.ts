@@ -5,8 +5,10 @@ import {
   MAX_REWRITE_HISTORY_ENTRIES,
   reviewResultSchema,
   rewriteHistoryEntrySchema,
+  selectableModelSchema,
   sourceSnapshotSchema,
 } from "@/lib/shared/contracts";
+import { DEFAULT_SELECTABLE_MODEL } from "@/lib/shared/models";
 
 export const REWRITE_SESSION_STORAGE_KEY = "pressready:rewrite-session:v1";
 
@@ -19,6 +21,7 @@ export const persistedRewriteSessionSchema = z
     version: z.literal(1),
     draft: z.string().max(MAX_REFERENCE_CHARS),
     sourceUrl: z.string().max(2_048),
+    model: selectableModelSchema.default(DEFAULT_SELECTABLE_MODEL),
     reviewedInputSignature: z.string().min(1).max(MAX_REFERENCE_CHARS * 2 + 5_000),
     reviewedSource: sourceSnapshotSchema,
     review: reviewResultSchema,

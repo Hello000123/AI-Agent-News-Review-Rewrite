@@ -14,6 +14,20 @@ import {
   lowReviewModelResponse,
 } from "@/tests/fixtures/reviews";
 
+vi.mock("@/lib/server/auth/guards", () => ({
+  requireApiSession: vi.fn().mockResolvedValue({
+    id: "editorial-test-session",
+    user: {
+      id: "editorial-test-user",
+      email: "editor@example.test",
+      fullName: "Editorial Test User",
+      role: "client",
+    },
+    csrfTokenHash: "test",
+    expiresAt: 4_102_444_800,
+  }),
+}));
+
 const PUBLIC_SOURCE_URL = "https://93.184.216.34/reference-article";
 
 const rewriteSource: SourceSnapshot = {
@@ -53,13 +67,15 @@ function providerCall(fetchMock: ReturnType<typeof vi.fn>, callIndex = 0) {
   const call = fetchMock.mock.calls.filter(([url]) =>
     String(url).includes("/chat/completions"),
   )[callIndex];
-  if (!call) throw new Error("Expected a DeepSeek provider call.");
+  if (!call) throw new Error("Expected an AI provider call.");
   return call as unknown as [string, RequestInit];
 }
 
 function providerRequestBody(fetchMock: ReturnType<typeof vi.fn>, callIndex = 0) {
   const [, init] = providerCall(fetchMock, callIndex);
   return JSON.parse(String(init.body)) as {
+    model?: string;
+    reasoning_effort?: string;
     response_format?: unknown;
     messages: Array<{ role: string; content: string }>;
   };
@@ -82,7 +98,7 @@ describe("review and rewrite API routes", () => {
   });
 
   it("returns a calibrated failing review after exactly one Review Agent call", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("XAI_API_KEY", "test-key");
     const fetchMock = vi
       .fn()
       .mockResolvedValue(completionResponse(JSON.stringify(lowReviewModelResponse)));
@@ -98,8 +114,11 @@ describe("review and rewrite API routes", () => {
 
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(providerRequestBody(fetchMock)).toHaveProperty("response_format", {
-      type: "json_object",
+    expect(providerCall(fetchMock)[0]).toBe("https://api.x.ai/v1/chat/completions");
+    expect(providerRequestBody(fetchMock)).toMatchObject({
+      model: "grok-4.5",
+      reasoning_effort: "high",
+      response_format: { type: "json_object" },
     });
     expect(body.review).toMatchObject({
       overallScore: 41,
@@ -118,7 +137,7 @@ describe("review and rewrite API routes", () => {
   });
 
   it("accepts full editorial input and returns the retrieved source snapshot it reviewed", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("DEEPSEEK_API_KEY", "deepseek-test-key");
     const sourceHtml = `
       <html><head><meta property="og:title" content="Reference headline"></head><body>
         <article itemprop="articleBody">
@@ -140,6 +159,7 @@ describe("review and rewrite API routes", () => {
     const editorialInput = {
       draft: "The submitted draft says the pilot is complete.",
       sourceUrl: PUBLIC_SOURCE_URL,
+      model: "deepseek-v4-pro",
     } as const;
     const response = await reviewRoute(
       request("/api/review", JSON.stringify(editorialInput)),
@@ -170,7 +190,12 @@ describe("review and rewrite API routes", () => {
     );
 
     const providerBody = providerRequestBody(fetchMock);
-    expect(providerBody).toHaveProperty("response_format", { type: "json_object" });
+    expect(providerCall(fetchMock)[0]).toBe("https://api.deepseek.com/chat/completions");
+    expect(providerBody).toMatchObject({
+      model: "deepseek-v4-pro",
+      reasoning_effort: "high",
+      response_format: { type: "json_object" },
+    });
     const userPrompt = providerUserPrompt(fetchMock);
     expect(userPrompt).toContain(editorialInput.draft);
     expect(userPrompt).toContain(PUBLIC_SOURCE_URL);
@@ -180,7 +205,7 @@ describe("review and rewrite API routes", () => {
   });
 
   it("derives the source language and rewrites even when the review score is high", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("DEEPSEEK_API_KEY", "deepseek-test-key");
     const finalText =
       "Supported update confirmed\n\nOfficials confirmed the supported update in a clearer report.";
     const fetchMock = vi.fn().mockResolvedValue(completionResponse(finalText));
@@ -192,6 +217,7 @@ describe("review and rewrite API routes", () => {
         JSON.stringify({
           source: rewriteSource,
           review: highReview,
+          model: "deepseek-v4-pro",
         }),
       ),
     );
@@ -202,6 +228,11 @@ describe("review and rewrite API routes", () => {
       validation: { status: "passed", attempts: 1 },
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(providerCall(fetchMock)[0]).toBe("https://api.deepseek.com/chat/completions");
+    expect(providerRequestBody(fetchMock)).toMatchObject({
+      model: "deepseek-v4-pro",
+      reasoning_effort: "high",
+    });
     expect(providerRequestBody(fetchMock)).not.toHaveProperty("response_format");
     const userPrompt = providerUserPrompt(fetchMock);
     expect(userPrompt).toContain("LANGUAGE LOCK: English");
@@ -211,7 +242,7 @@ describe("review and rewrite API routes", () => {
   });
 
   it("forwards refinement history and the latest length preference to the Rewrite Agent", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("XAI_API_KEY", "test-key");
     const finalText =
       "Supported update refined\n\nOfficials presented the supported update in a more formal report.";
     const fetchMock = vi.fn().mockResolvedValue(completionResponse(finalText));
@@ -268,7 +299,7 @@ describe("review and rewrite API routes", () => {
     draft,
     rewritten,
   }) => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("XAI_API_KEY", "test-key");
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(completionResponse(JSON.stringify(highReviewModelResponse)))
@@ -302,26 +333,30 @@ describe("review and rewrite API routes", () => {
     expect(JSON.stringify(rewrittenBody)).not.toContain("PRIVATE_REASONING_MARKER");
   });
 
-  it("returns complete safe diagnostics for a deliberately invalid model", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
-    vi.stubEnv("DEEPSEEK_MODEL", "invalid-model-diagnostic");
+  it("returns complete safe diagnostics when DeepSeek rejects its allowed model", async () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "deepseek-test-key");
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
           error: {
-            message:
-              "The supported API model names are deepseek-v4-pro or deepseek-v4-flash, but you passed invalid-model-diagnostic.",
+            message: "The model deepseek-v4-pro does not exist or you do not have access to it.",
             type: "invalid_request_error",
-            code: "invalid_request_error",
+            code: "model_not_found",
           },
         }),
-        { status: 400, headers: { "Content-Type": "application/json" } },
+        { status: 404, headers: { "Content-Type": "application/json" } },
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     const response = await reviewRoute(
-      request("/api/review", JSON.stringify({ draft: "Test invalid model handling." })),
+      request(
+        "/api/review",
+        JSON.stringify({
+          draft: "Test provider model handling.",
+          model: "deepseek-v4-pro",
+        }),
+      ),
     );
     const body = (await response.json()) as {
       error: Record<string, unknown>;
@@ -332,20 +367,20 @@ describe("review and rewrite API routes", () => {
       code: "DEEPSEEK_MODEL_ERROR",
       stage: "review_request",
       provider: "DeepSeek",
-      model: "invalid-model-diagnostic",
-      httpStatus: 400,
+      model: "deepseek-v4-pro",
+      httpStatus: 404,
       retryable: false,
-      causeSummary: expect.stringContaining("Supported model IDs"),
+      causeSummary: expect.stringContaining("access deepseek-v4-pro"),
     });
     const serialized = JSON.stringify(body);
-    expect(serialized).not.toContain("test-key");
+    expect(serialized).not.toContain("deepseek-test-key");
     expect(serialized).not.toContain("Authorization");
     expect(serialized).not.toContain("PRIVATE_REASONING_MARKER");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("fails closed when model scores are missing, non-numeric, or out of range", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+    vi.stubEnv("XAI_API_KEY", "test-key");
     for (const malformedReview of [
       { ...highReviewModelResponse, clarityScore: "91" },
       { ...highReviewModelResponse, clarityScore: 101 },
@@ -400,6 +435,48 @@ describe("review and rewrite API routes", () => {
     expect(await responseErrorCode(rewriteResponse)).toBe("VALIDATION_ERROR");
   });
 
+  it("rejects model identifiers outside the website allowlist", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const reviewResponse = await reviewRoute(
+      request(
+        "/api/review",
+        JSON.stringify({ draft: "Complete submitted copy.", model: "grok-4.3" }),
+      ),
+    );
+    expect(reviewResponse.status).toBe(400);
+    const reviewError = (await reviewResponse.json()) as {
+      error: { code: string; message: string; details?: string[] };
+    };
+    expect(reviewError.error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "Unsupported AI model. Choose DeepSeek V4 Pro or Grok 4.5.",
+    });
+    expect(reviewError.error.details).toContain(
+      "Unsupported AI model. Choose DeepSeek V4 Pro or Grok 4.5.",
+    );
+
+    const rewriteResponse = await rewriteRoute(
+      request(
+        "/api/rewrite",
+        JSON.stringify({
+          source: rewriteSource,
+          review: highReview,
+          model: "arbitrary-provider-model",
+        }),
+      ),
+    );
+    expect(rewriteResponse.status).toBe(400);
+    const rewriteError = (await rewriteResponse.json()) as {
+      error: { code: string; message: string };
+    };
+    expect(rewriteError.error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "Unsupported AI model. Choose DeepSeek V4 Pro or Grok 4.5.",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects the removed picture-input field", async () => {
     const response = await reviewRoute(
       request(
@@ -433,21 +510,21 @@ describe("review and rewrite API routes", () => {
   });
 
   it("accepts very short input, then reports missing server configuration", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "");
+    vi.stubEnv("XAI_API_KEY", "");
     const response = await reviewRoute(
       request("/api/review", JSON.stringify({ draft: "News soon." })),
     );
     expect(response.status).toBe(503);
-    expect(await responseErrorCode(response)).toBe("DEEPSEEK_NOT_CONFIGURED");
+    expect(await responseErrorCode(response)).toBe("XAI_NOT_CONFIGURED");
   });
 
   it("accepts the draft character limit and rejects one character beyond it", async () => {
-    vi.stubEnv("DEEPSEEK_API_KEY", "");
+    vi.stubEnv("XAI_API_KEY", "");
     const atLimit = await reviewRoute(
       request("/api/review", JSON.stringify({ draft: "a".repeat(MAX_DRAFT_CHARS) })),
     );
     expect(atLimit.status).toBe(503);
-    expect(await responseErrorCode(atLimit)).toBe("DEEPSEEK_NOT_CONFIGURED");
+    expect(await responseErrorCode(atLimit)).toBe("XAI_NOT_CONFIGURED");
 
     const overLimit = await reviewRoute(
       request("/api/review", JSON.stringify({ draft: "a".repeat(MAX_DRAFT_CHARS + 1) })),

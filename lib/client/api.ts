@@ -12,6 +12,9 @@ import {
   type RewriteRequest,
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
+import type { SelectableModelId } from "@/lib/shared/models";
+import { csrfHeaders } from "@/lib/client/auth-api";
+import { clearRewriteSession } from "@/lib/client/rewrite-session";
 
 export const REWRITE_REQUEST_SAFE_BYTES = MAX_REQUEST_BYTES - 8_192;
 
@@ -59,7 +62,7 @@ export class ApiRequestError extends Error {
 
 async function postJson(endpoint: string, body: unknown) {
   const stage = endpoint.endsWith("/rewrite") ? "rewrite_request" : "review_request";
-  // One Review call can wait for DeepSeek's documented ten-minute queue window;
+  // One Review call can wait for a long-running Grok reasoning response;
   // Rewrite can make two sequential provider calls for its validation retry.
   const timeoutMs = stage === "rewrite_request" ? 21 * 60_000 : 11 * 60_000;
   const controller = new AbortController();
@@ -68,7 +71,7 @@ async function postJson(endpoint: string, body: unknown) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...csrfHeaders() },
       body: JSON.stringify(body),
       cache: "no-store",
       signal: controller.signal,
@@ -82,7 +85,7 @@ async function postJson(endpoint: string, body: unknown) {
         {
           retryable: true,
           stage,
-          provider: "DeepSeek",
+          provider: "xAI",
           httpStatus: 0,
           causeSummary: `No complete application response arrived within ${Math.round(timeoutMs / 60_000)} minutes.`,
         },
@@ -94,7 +97,7 @@ async function postJson(endpoint: string, body: unknown) {
       {
         retryable: true,
         stage,
-        provider: "DeepSeek",
+        provider: "xAI",
         httpStatus: 0,
         causeSummary: "The browser did not receive an HTTP response from the application server.",
       },
@@ -113,7 +116,7 @@ async function postJson(endpoint: string, body: unknown) {
         {
           retryable: true,
           stage,
-          provider: "DeepSeek",
+          provider: "xAI",
           httpStatus: 0,
           causeSummary: `No complete application response arrived within ${Math.round(timeoutMs / 60_000)} minutes.`,
         },
@@ -127,6 +130,14 @@ async function postJson(endpoint: string, body: unknown) {
     const parsedError = apiErrorResponseSchema.safeParse(responseBody);
     if (parsedError.success) {
       const serverError = parsedError.data.error;
+      if (
+        response.status === 401 &&
+        serverError.code === "AUTH_REQUIRED" &&
+        typeof window !== "undefined"
+      ) {
+        clearRewriteSession();
+        window.location.replace("/login?reason=session-expired");
+      }
       throw new ApiRequestError(
         serverError.code,
         serverError.message,
@@ -171,9 +182,16 @@ export async function requestRewrite(
   review: ReviewResult,
   history: readonly RewriteHistoryEntryInput[] = [],
   refinement: RewriteRefinementInput = {},
+  model?: SelectableModelId,
 ) {
   const payload = compactRewriteRequest(
-    rewriteRequestSchema.parse({ source, review, history, refinement }),
+    rewriteRequestSchema.parse({
+      source,
+      review,
+      history,
+      refinement,
+      ...(model ? { model } : {}),
+    }),
   );
   const responseBody = await postJson("/api/rewrite", payload);
   const parsed = rewriteApiResponseSchema.safeParse(responseBody);

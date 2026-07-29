@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildXlsxReport } from "./build-xlsx-report.mjs";
@@ -22,12 +23,22 @@ import {
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, "..", "..");
 
+export const TEST_MODEL_OPTIONS = Object.freeze([
+  { id: "grok-4.5", label: "Grok 4.5", recommended: true },
+  { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", recommended: false },
+]);
+
+const testModelIds = new Set(TEST_MODEL_OPTIONS.map(({ id }) => id));
+const defaultTestModel = TEST_MODEL_OPTIONS[0].id;
+
 const REVIEWER_SOURCE_FILES = Object.freeze([
   "app/api/review/route.ts",
   "lib/server/agents/review-agent.ts",
   "lib/server/agents/prompts.ts",
   "lib/server/agents/time-context.ts",
   "lib/server/agents/workflow.ts",
+  "lib/server/agents/model-client.ts",
+  "lib/server/agents/grok-client.ts",
   "lib/server/agents/deepseek-client.ts",
   "lib/server/config.ts",
   "lib/server/http.ts",
@@ -50,11 +61,68 @@ function optionValue(argumentsList, index, name) {
   return argumentsList[index + 1];
 }
 
+function supportedModel(value) {
+  const model = value?.trim() || "";
+  return testModelIds.has(model) ? model : "";
+}
+
+function requireSupportedModel(value, source) {
+  const model = supportedModel(value);
+  if (model) return model;
+  throw new Error(
+    `${source} must be one of: ${TEST_MODEL_OPTIONS.map(({ id }) => id).join(", ")}.`,
+  );
+}
+
+export function modelFromPromptChoice(choice, defaultModel = defaultTestModel) {
+  const normalizedChoice = choice.trim().toLocaleLowerCase();
+  if (!normalizedChoice) return supportedModel(defaultModel) || defaultTestModel;
+  const numericIndex = Number(normalizedChoice);
+  if (Number.isInteger(numericIndex) && numericIndex >= 1 && numericIndex <= TEST_MODEL_OPTIONS.length) {
+    return TEST_MODEL_OPTIONS[numericIndex - 1].id;
+  }
+  return supportedModel(normalizedChoice);
+}
+
+export async function promptForTestModel(
+  defaultModel = defaultTestModel,
+  { input = process.stdin, output = process.stdout } = {},
+) {
+  if (!input.isTTY || !output.isTTY) {
+    throw new Error(
+      "Choose a test model with --model grok-4.5 or --model deepseek-v4-pro when running non-interactively.",
+    );
+  }
+
+  const selectedDefault = supportedModel(defaultModel) || defaultTestModel;
+  const defaultNumber = TEST_MODEL_OPTIONS.findIndex(({ id }) => id === selectedDefault) + 1;
+  const menu = TEST_MODEL_OPTIONS.map(
+    ({ id, label, recommended }, index) =>
+      `  ${index + 1}) ${label} (${id})${recommended ? " - recommended" : ""}`,
+  ).join("\n");
+  output.write(`Choose the AI model for this calibration test:\n${menu}\n`);
+
+  const readline = createInterface({ input, output });
+  try {
+    while (true) {
+      const answer = await readline.question(`Select 1 or 2 [${defaultNumber}]: `);
+      const model = modelFromPromptChoice(answer, selectedDefault);
+      if (model) return model;
+      output.write("Invalid choice. Enter 1, 2, grok-4.5, or deepseek-v4-pro.\n");
+    }
+  } finally {
+    readline.close();
+  }
+}
+
 function readNonSecretProjectEnv(text) {
   const allowed = new Set([
-    "DEEPSEEK_MODEL",
+    "AI_MODEL",
+    "XAI_MODEL",
+    "XAI_TIMEOUT_MS",
     "DEEPSEEK_TIMEOUT_MS",
     "REVIEW_PASS_SCORE",
+    "XAI_STREAM",
     "DEEPSEEK_STREAM",
   ]);
   const values = {};
@@ -120,9 +188,18 @@ async function calculateReviewerSha256(modelName, baseUrl, localEnv) {
   hash.update(JSON.stringify({
     model_name: modelName,
     base_url: baseUrl,
-    configured_model: process.env.DEEPSEEK_MODEL || localEnv.DEEPSEEK_MODEL || "",
+    configured_model:
+      process.env.AI_MODEL ||
+      localEnv.AI_MODEL ||
+      process.env.XAI_MODEL ||
+      localEnv.XAI_MODEL ||
+      "",
     review_pass_score: process.env.REVIEW_PASS_SCORE || localEnv.REVIEW_PASS_SCORE || "",
-    stream_mode: process.env.DEEPSEEK_STREAM || localEnv.DEEPSEEK_STREAM || "",
+    xai_stream_mode: process.env.XAI_STREAM || localEnv.XAI_STREAM || "",
+    deepseek_stream_mode:
+      process.env.DEEPSEEK_STREAM ||
+      localEnv.DEEPSEEK_STREAM ||
+      "",
   }));
 
   for (const relativePath of REVIEWER_SOURCE_FILES) {
@@ -162,8 +239,12 @@ Options:
   --backoff-ms N          Initial exponential-backoff delay, 0-60000 (default 1000)
   --timeout-ms N          Per local endpoint request timeout, 1000-900000
   --repeats N             Runs per draft, 1-10 (default 1)
-  --model-name NAME       Non-secret model label recorded in results
+  --model MODEL           Use grok-4.5 or deepseek-v4-pro without an interactive prompt
+  --model-name MODEL      Backward-compatible alias for --model
   --dataset PATH          Reusable dataset CSV path
+  --allow-dataset-quality-warnings
+                          Permit duplicate/similar/language-quality warnings; structural validation stays strict
+                          (automatically enabled for the bundled default dataset)
   --output-dir PATH       Results/report directory (default: this script directory)
   --smoke                 Select the first draft in each category (five requests)
   --dry-run               Validate inputs and build reports without any request
@@ -175,8 +256,13 @@ Options:
 
 async function parseOptions(argumentsList) {
   const localEnv = await projectEnvironment();
-  const configuredProviderTimeout = Number(
-    process.env.DEEPSEEK_TIMEOUT_MS || localEnv.DEEPSEEK_TIMEOUT_MS || 600_000,
+  const configuredProviderTimeout = Math.max(
+    Number(process.env.XAI_TIMEOUT_MS || localEnv.XAI_TIMEOUT_MS || 600_000),
+    Number(
+      process.env.DEEPSEEK_TIMEOUT_MS ||
+      localEnv.DEEPSEEK_TIMEOUT_MS ||
+      600_000
+    ),
   );
   const fallbackTimeout = Number.isFinite(configuredProviderTimeout)
     ? Math.min(900_000, Math.max(1_000, configuredProviderTimeout + 30_000))
@@ -188,12 +274,16 @@ async function parseOptions(argumentsList) {
     backoffMs: 1_000,
     timeoutMs: Number(process.env.REVIEW_EVAL_TIMEOUT_MS || fallbackTimeout),
     repeats: 1,
-    modelName:
-      process.env.EVAL_MODEL ||
-      process.env.DEEPSEEK_MODEL ||
-      localEnv.DEEPSEEK_MODEL ||
-      "server-configured-model",
-    datasetPath: path.join(scriptDirectory, "chinese_review_drafts.csv"),
+    modelName: process.env.EVAL_MODEL?.trim() || "",
+    modelWasExplicit: Boolean(process.env.EVAL_MODEL?.trim()),
+    defaultModel:
+      supportedModel(process.env.AI_MODEL) ||
+      supportedModel(localEnv.AI_MODEL) ||
+      supportedModel(process.env.XAI_MODEL) ||
+      supportedModel(localEnv.XAI_MODEL) ||
+      defaultTestModel,
+    datasetPath: path.join(scriptDirectory, "chinese_review_drafts_from_txt.csv"),
+    allowDatasetQualityWarnings: false,
     outputDirectory: scriptDirectory,
     smoke: false,
     dryRun: false,
@@ -201,6 +291,7 @@ async function parseOptions(argumentsList) {
     force: false,
     help: false,
   };
+  let datasetWasExplicit = false;
 
   for (let index = 0; index < argumentsList.length; index += 1) {
     const argument = argumentsList[index];
@@ -230,12 +321,18 @@ async function parseOptions(argumentsList) {
         index += 1;
         break;
       case "--model-name":
-        options.modelName = optionValue(argumentsList, index, argument).trim();
+      case "--model":
+        options.modelName = requireSupportedModel(optionValue(argumentsList, index, argument), argument);
+        options.modelWasExplicit = true;
         index += 1;
         break;
       case "--dataset":
         options.datasetPath = path.resolve(optionValue(argumentsList, index, argument));
+        datasetWasExplicit = true;
         index += 1;
+        break;
+      case "--allow-dataset-quality-warnings":
+        options.allowDatasetQualityWarnings = true;
         break;
       case "--output-dir":
         options.outputDirectory = path.resolve(optionValue(argumentsList, index, argument));
@@ -262,13 +359,22 @@ async function parseOptions(argumentsList) {
     }
   }
 
-  if (!options.modelName || options.modelName.length > 120) {
-    throw new Error("--model-name must contain 1-120 characters.");
+  if (!datasetWasExplicit) {
+    options.allowDatasetQualityWarnings = true;
+  }
+
+  if (options.modelWasExplicit) {
+    options.modelName = requireSupportedModel(
+      options.modelName,
+      process.env.EVAL_MODEL?.trim() && !argumentsList.includes("--model") && !argumentsList.includes("--model-name")
+        ? "EVAL_MODEL"
+        : "--model",
+    );
   }
   options.baseUrl = normalizeBaseUrl(options.baseUrl);
   options.datasetPath = path.resolve(options.datasetPath);
   options.outputDirectory = path.resolve(options.outputDirectory);
-  options.reviewerSha256 = await calculateReviewerSha256(options.modelName, options.baseUrl, localEnv);
+  options.localEnv = localEnv;
   return options;
 }
 
@@ -353,12 +459,26 @@ export async function main(argumentsList = process.argv.slice(2)) {
     return 0;
   }
 
+  const noRequestMode = options.dryRun || options.reportOnly;
+  options.modelName = options.modelWasExplicit
+    ? options.modelName
+    : noRequestMode
+      ? options.defaultModel
+      : await promptForTestModel(options.defaultModel);
+  options.reviewerSha256 = await calculateReviewerSha256(
+    options.modelName,
+    options.baseUrl,
+    options.localEnv,
+  );
+
   const resultsPath = path.join(options.outputDirectory, "chinese_review_results.csv");
   const rawLogPath = path.join(options.outputDirectory, "chinese_review_responses.jsonl");
   const workbookPath = path.join(options.outputDirectory, "chinese_review_test_report.xlsx");
   const previewDirectory = process.env.CHINESE_REVIEW_QA_PREVIEW_DIR?.trim() || "";
 
-  const { rows: dataset, warnings } = await loadDataset(options.datasetPath);
+  const { rows: dataset, warnings } = await loadDataset(options.datasetPath, {
+    allowQualityWarnings: options.allowDatasetQualityWarnings,
+  });
   const tasks = buildTasks(dataset, { repeats: options.repeats, smoke: options.smoke });
   const currentDatasetSha256 = datasetSha256(dataset);
   const loadedResults = await loadResults(resultsPath);
@@ -380,7 +500,6 @@ export async function main(argumentsList = process.argv.slice(2)) {
     process.stdout.write(`Dataset similarity warnings: ${warnings.length}. Review with --dry-run output if drafts change.\n`);
   }
 
-  const noRequestMode = options.dryRun || options.reportOnly;
   await appendRunRecord(
     rawLogPath,
     options,
@@ -404,6 +523,7 @@ export async function main(argumentsList = process.argv.slice(2)) {
         retryLimit: options.retries,
         backoffMs: options.backoffMs,
         modelName: options.modelName,
+        modelId: options.modelName,
         reviewerSha256: options.reviewerSha256,
         rawLogPath,
       },

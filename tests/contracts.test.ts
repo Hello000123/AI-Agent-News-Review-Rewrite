@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  DEFAULT_REVIEW_PASS_SCORE,
   DEFAULT_DEEPSEEK_MODEL,
+  DEFAULT_REVIEW_PASS_SCORE,
+  DEFAULT_XAI_MODEL,
   DEFAULT_STREAM_RESPONSES,
   DEFAULT_TIMEOUT_MS,
+  getDeepSeekServerConfig,
   getReviewPassScore,
   getServerConfig,
+  getWebsiteDefaultModel,
 } from "@/lib/server/config";
 import {
   MAX_DRAFT_CHARS,
@@ -63,8 +66,21 @@ describe("editorial input and review contracts", () => {
       editorialInputSchema.safeParse({
         draft: "Submitted copy.",
         sourceUrl: "https://news.example/article",
+        model: "deepseek-v4-pro",
       }).success,
     ).toBe(true);
+    expect(
+      editorialInputSchema.safeParse({
+        draft: "Submitted copy.",
+        model: "grok-4.3",
+      }).success,
+    ).toBe(false);
+    expect(
+      editorialInputSchema.safeParse({
+        draft: "Submitted copy.",
+        model: "arbitrary-provider-model",
+      }).success,
+    ).toBe(false);
     expect(
       editorialInputSchema.safeParse({
         draft: "Submitted copy.",
@@ -149,12 +165,24 @@ describe("editorial input and review contracts", () => {
   });
 
   it("uses source and calibrated review as the automatic-language rewrite contract", () => {
-    expect(rewriteRequestSchema.parse({ source, review: highReview })).toMatchObject({
+    expect(rewriteRequestSchema.parse({
       source,
       review: highReview,
+      model: "grok-4.5",
+    })).toMatchObject({
+      source,
+      review: highReview,
+      model: "grok-4.5",
       history: [],
       refinement: { lengthOption: null, instruction: "" },
     });
+    expect(
+      rewriteRequestSchema.safeParse({
+        source,
+        review: highReview,
+        model: "arbitrary-provider-model",
+      }).success,
+    ).toBe(false);
     expect(
       rewriteRequestSchema.safeParse({
         source,
@@ -284,36 +312,61 @@ describe("server configuration", () => {
 
   it("uses safe defaults for absent or invalid numeric settings", () => {
     vi.stubEnv("REVIEW_PASS_SCORE", "not-a-number");
-    vi.stubEnv("DEEPSEEK_TIMEOUT_MS", "50");
+    vi.stubEnv("XAI_TIMEOUT_MS", "50");
     expect(getReviewPassScore()).toBe(DEFAULT_REVIEW_PASS_SCORE);
     expect(getServerConfig().timeoutMs).toBe(DEFAULT_TIMEOUT_MS);
-    expect(getServerConfig().model).toBe(DEFAULT_DEEPSEEK_MODEL);
+    expect(getServerConfig().model).toBe(DEFAULT_XAI_MODEL);
     expect(getServerConfig().streamResponses).toBe(DEFAULT_STREAM_RESPONSES);
   });
 
-  it("accepts configurable threshold, model, URL, and timeout", () => {
+  it("accepts provider credentials, URLs, streaming, and timeout settings", () => {
     vi.stubEnv("REVIEW_PASS_SCORE", "85");
-    vi.stubEnv("DEEPSEEK_MODEL", "deepseek-v4-pro");
-    vi.stubEnv("DEEPSEEK_API_BASE_URL", "https://example.test///");
-    vi.stubEnv("DEEPSEEK_TIMEOUT_MS", "120000");
-    vi.stubEnv("DEEPSEEK_STREAM", "false");
-    vi.stubEnv("DEEPSEEK_API_KEY", " secret ");
+    vi.stubEnv("XAI_MODEL", "grok-4.3");
+    vi.stubEnv("XAI_API_BASE_URL", "https://example.test///");
+    vi.stubEnv("XAI_TIMEOUT_MS", "120000");
+    vi.stubEnv("XAI_STREAM", "false");
+    vi.stubEnv("XAI_API_KEY", " secret ");
 
     expect(getServerConfig()).toEqual({
       apiKey: "secret",
       apiBaseUrl: "https://example.test",
-      model: "deepseek-v4-pro",
+      model: "grok-4.5",
       passScore: 85,
       timeoutMs: 120000,
       streamResponses: false,
     });
+
+    vi.stubEnv("DEEPSEEK_API_BASE_URL", "https://deepseek.example.test///");
+    vi.stubEnv("DEEPSEEK_TIMEOUT_MS", "180000");
+    vi.stubEnv("DEEPSEEK_STREAM", "false");
+    vi.stubEnv("DEEPSEEK_API_KEY", " deepseek-secret ");
+    expect(getDeepSeekServerConfig()).toEqual({
+      apiKey: "deepseek-secret",
+      apiBaseUrl: "https://deepseek.example.test",
+      model: DEFAULT_DEEPSEEK_MODEL,
+      passScore: 85,
+      timeoutMs: 180000,
+      streamResponses: false,
+    });
+  });
+
+  it("uses only supported website models for the browser picker default", () => {
+    vi.stubEnv("AI_MODEL", "deepseek-v4-pro");
+    expect(getWebsiteDefaultModel()).toBe("deepseek-v4-pro");
+
+    vi.stubEnv("AI_MODEL", "");
+    vi.stubEnv("XAI_MODEL", "grok-4.3");
+    expect(getWebsiteDefaultModel()).toBe(DEFAULT_XAI_MODEL);
   });
 
   it("falls back when the configured API base URL is blank or invalid", () => {
-    vi.stubEnv("DEEPSEEK_API_BASE_URL", "   ");
-    expect(getServerConfig().apiBaseUrl).toBe("https://api.deepseek.com");
+    vi.stubEnv("XAI_API_BASE_URL", "   ");
+    expect(getServerConfig().apiBaseUrl).toBe("https://api.x.ai/v1");
+
+    vi.stubEnv("XAI_API_BASE_URL", "file:///tmp/provider");
+    expect(getServerConfig().apiBaseUrl).toBe("https://api.x.ai/v1");
 
     vi.stubEnv("DEEPSEEK_API_BASE_URL", "file:///tmp/provider");
-    expect(getServerConfig().apiBaseUrl).toBe("https://api.deepseek.com");
+    expect(getDeepSeekServerConfig().apiBaseUrl).toBe("https://api.deepseek.com");
   });
 });

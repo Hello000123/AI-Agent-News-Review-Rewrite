@@ -4,7 +4,9 @@ This isolated test suite sends 150 fictional Traditional Chinese (Hong Kong) dra
 
 ## Files
 
-- `chinese_review_drafts.csv` — reusable 150-draft dataset, encoded as UTF-8 with BOM.
+- `chinese_review_drafts_from_txt.csv` — default 150-draft dataset converted from the supplied pipe-delimited TXT file, encoded as UTF-8 with BOM.
+- `chinese_review_drafts.csv` — reusable quote-all reference dataset, encoded as UTF-8 with BOM.
+- `convert-pipe-dataset.mjs` — validates and converts future pipe-delimited TXT datasets.
 - `run-chinese-review-test.mjs` — command-line runner.
 - `review-test-lib.mjs` — validation, concurrency, retry, persistence, resume, and analysis logic.
 - `build-xlsx-report.mjs` — workbook builder and workbook verification.
@@ -19,10 +21,10 @@ The public review response contains six component scores, `weightedScore`, optio
 
 - Node.js 22.13 or later (the project already requires this).
 - Project dependencies installed with `npm install`.
-- A running local application. Next.js reads the existing server-only DeepSeek settings from `.env.local`; the runner never hard-codes or prints the API key.
+- A running local application. Next.js reads the existing server-only Grok settings from `.env.local`; the runner never hard-codes or prints the API key.
 - Workbook generation uses the Codex-bundled `@oai/artifact-tool` runtime. The runner auto-discovers the local bundle. If it is elsewhere, set `CODEX_ARTIFACT_NODE_MODULES` to its `node_modules` directory.
 
-The model label is read in this order: `EVAL_MODEL`, `DEEPSEEK_MODEL` in the current environment, the non-secret `DEEPSEEK_MODEL` value in `.env.local`, then `server-configured-model`. Successful `/api/review` responses do not themselves expose a model name.
+Before a live test, the runner asks whether to use Grok 4.5 or DeepSeek V4 Pro. The selected model ID is sent in every `/api/review` request and recorded in the results. Use `--model` (or `EVAL_MODEL`) to make the selection non-interactively. `AI_MODEL` in the current environment or `.env.local` supplies the menu default only. Dry-run and report-only commands use that default without prompting because they make no AI request.
 
 ## Safe resume and change detection
 
@@ -41,6 +43,14 @@ Run suite commands in a second PowerShell window from the same project directory
 
 ## Commands
 
+Convert the supplied pipe-delimited TXT file into the calibration CSV schema:
+
+```powershell
+npm run convert:review-dataset -- "C:\Users\Jimmy\Desktop\New Text Document.txt" "tests\chinese-review-calibration\chinese_review_drafts_from_txt.csv"
+```
+
+The converter checks all 150 rows, derives `expected_min` and `expected_max` from each category, preserves UTF-8 Traditional Chinese text, and writes a UTF-8 BOM CSV. The input TXT remains unchanged. The bundled default dataset has 29 known non-structural similarity/content-quality warnings, which the runner permits automatically; explicitly supplied datasets remain strict unless `--allow-dataset-quality-warnings` is used.
+
 Validate all 150 drafts and rebuild reports without calling the Review Agent or any AI:
 
 ```powershell
@@ -51,6 +61,12 @@ Run one draft from each category (five paid review requests unless already succe
 
 ```powershell
 node tests\chinese-review-calibration\run-chinese-review-test.mjs --smoke
+```
+
+The live command displays the model menu before it sends any request. For automation, bypass the menu explicitly:
+
+```powershell
+node tests\chinese-review-calibration\run-chinese-review-test.mjs --smoke --model grok-4.5
 ```
 
 Run the complete test (150 paid review requests at the default one repeat). Obtain approval before doing this:
@@ -86,6 +102,10 @@ Useful options:
 --timeout-ms N        Local endpoint timeout (default: provider timeout + 30 seconds)
 --repeats 1..10       Runs per draft (default 1)
 --base-url URL        Application URL (default http://127.0.0.1:3000)
+--model MODEL         Select grok-4.5 or deepseek-v4-pro without prompting
+--dataset PATH        Use a calibration CSV such as chinese_review_drafts_from_txt.csv
+--allow-dataset-quality-warnings
+                      Keep structural checks strict but permit known content-quality warnings
 --report-only         Rebuild the workbook from the current CSVs without requests
 --output-dir PATH     Put results, JSONL, and workbook in another directory
 ```

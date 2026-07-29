@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   CATEGORY_CONFIG,
+  PIPE_DATASET_HEADERS,
   RESULT_HEADERS,
   analyzeResults,
   buildTasks,
@@ -15,6 +16,7 @@ import {
   loadDataset,
   loadResults,
   parseCsv,
+  parsePipeDataset,
   predictCategory,
   rangeDistance,
   reconcileResults,
@@ -23,6 +25,7 @@ import {
   serializeCsv,
   validateReviewApiResponse,
 } from "./review-test-lib.mjs";
+import { modelFromPromptChoice } from "./run-chinese-review-test.mjs";
 
 function makeDrafts(perCategory = 2) {
   let globalOrder = 0;
@@ -78,6 +81,34 @@ test("CSV round-trips BOM-safe multiline Traditional Chinese text", () => {
   assert.equal(csvEscape("a,b"), '"a,b"');
 });
 
+test("pipe-delimited TXT rows gain category score ranges and preserve pipes in draft text", () => {
+  const input = [
+    `\uFEFF${PIPE_DATASET_HEADERS.join("|")}`,
+    "001|ZH-EXCELLENT-001|001|Excellent|港聞草稿保留正文內的 | 符號。",
+  ].join("\r\n");
+  assert.deepEqual(parsePipeDataset(input), [{
+    global_order: "001",
+    draft_id: "ZH-EXCELLENT-001",
+    scenario_id: "001",
+    category: "Excellent",
+    expected_min: 85,
+    expected_max: 100,
+    draft_text: "港聞草稿保留正文內的 | 符號。",
+  }]);
+  assert.throws(
+    () => parsePipeDataset("global_order|draft_id\n001|ZH-EXCELLENT-001"),
+    /Pipe dataset (?:line 1|headers)/u,
+  );
+});
+
+test("interactive model choices resolve only to the two supported API model IDs", () => {
+  assert.equal(modelFromPromptChoice("", "deepseek-v4-pro"), "deepseek-v4-pro");
+  assert.equal(modelFromPromptChoice("1"), "grok-4.5");
+  assert.equal(modelFromPromptChoice("2"), "deepseek-v4-pro");
+  assert.equal(modelFromPromptChoice("grok-4.5"), "grok-4.5");
+  assert.equal(modelFromPromptChoice("unsupported-model"), "");
+});
+
 test("the reusable quote-all dataset loads and validates", async () => {
   const datasetPath = new URL("./chinese_review_drafts.csv", import.meta.url);
   const { rows, warnings } = await loadDataset(datasetPath);
@@ -85,6 +116,15 @@ test("the reusable quote-all dataset loads and validates", async () => {
   assert.equal(warnings.length, 0);
   assert.equal(rows[0].global_order, "001");
   assert.equal(rows.at(-1).global_order, "150");
+});
+
+test("the converted user TXT dataset loads and validates", async () => {
+  const datasetPath = new URL("./chinese_review_drafts_from_txt.csv", import.meta.url);
+  const { rows, warnings } = await loadDataset(datasetPath, { allowQualityWarnings: true });
+  assert.equal(rows.length, 150);
+  assert.equal(rows[0].draft_id, "ZH-EXCELLENT-001");
+  assert.equal(rows.at(-1).draft_id, "ZH-EXTREMELY-BAD-030");
+  assert.ok(warnings.length > 0);
 });
 
 test("legacy results load safely with blank fingerprints for one-time invalidation", async () => {
@@ -146,7 +186,7 @@ test("an exhausted or non-retryable failure is saved as an error, never score ze
     modelName: "mock-model",
     rawLogPath: path.join(temporaryDirectory, "responses.jsonl"),
     fetchImpl: async () => new Response(
-      JSON.stringify({ error: { code: "DEEPSEEK_AUTH_ERROR", message: "Rejected.", retryable: false } }),
+      JSON.stringify({ error: { code: "XAI_AUTH_ERROR", message: "Rejected.", retryable: false } }),
       { status: 502, headers: { "Content-Type": "application/json" } },
     ),
     sleepImpl: async () => {},
@@ -154,7 +194,7 @@ test("an exhausted or non-retryable failure is saved as an error, never score ze
   assert.equal(result.test_status, "Error");
   assert.equal(result.actual_overall_score, "");
   assert.notEqual(result.actual_overall_score, 0);
-  assert.equal(result.error_code, "DEEPSEEK_AUTH_ERROR");
+  assert.equal(result.error_code, "XAI_AUTH_ERROR");
   assert.equal(result.retry_count, 0);
   assert.equal(result.draft_sha256, draftSha256(task));
   const logRecords = (await fs.readFile(path.join(temporaryDirectory, "responses.jsonl"), "utf8"))
@@ -162,7 +202,33 @@ test("an exhausted or non-retryable failure is saved as an error, never score ze
     .split("\n")
     .map(JSON.parse);
   assert.equal(logRecords.length, 1);
-  assert.equal(logRecords[0].response.error.code, "DEEPSEEK_AUTH_ERROR");
+  assert.equal(logRecords[0].response.error.code, "XAI_AUTH_ERROR");
+  await fs.rm(temporaryDirectory, { recursive: true, force: true });
+});
+
+test("the selected model ID is sent to the production review route", async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "chinese-review-model-"));
+  let requestBody;
+  const task = { ...makeDrafts(1)[0], repeat_number: 1 };
+  const result = await reviewTask(task, {
+    baseUrl: "http://127.0.0.1:3999",
+    timeoutMs: 5_000,
+    retryLimit: 0,
+    backoffMs: 0,
+    modelName: "DeepSeek V4 Pro",
+    modelId: "deepseek-v4-pro",
+    rawLogPath: path.join(temporaryDirectory, "responses.jsonl"),
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body);
+      return new Response(JSON.stringify(reviewResponse(90)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+  assert.equal(requestBody.model, "deepseek-v4-pro");
+  assert.equal(requestBody.sourceUrl, "");
+  assert.equal(result.model_name, "DeepSeek V4 Pro");
   await fs.rm(temporaryDirectory, { recursive: true, force: true });
 });
 
@@ -192,7 +258,7 @@ test("five category workers honor concurrency, ordering, retry, persistence, res
     attempts.set(draft, (attempts.get(draft) ?? 0) + 1);
     if (draft === "Bad test draft 1" && attempts.get(draft) === 1) {
       return new Response(
-        JSON.stringify({ error: { code: "DEEPSEEK_RATE_LIMIT", message: "Temporary.", retryable: true } }),
+        JSON.stringify({ error: { code: "XAI_RATE_LIMIT", message: "Temporary.", retryable: true } }),
         { status: 503, headers: { "Content-Type": "application/json" } },
       );
     }

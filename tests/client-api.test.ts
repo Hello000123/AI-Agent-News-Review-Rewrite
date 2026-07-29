@@ -92,6 +92,35 @@ describe("client API response validation", () => {
     expect(failure?.details).toBeUndefined();
   });
 
+  it("posts the selected model with a review request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          review: highReview,
+          source,
+          passScore: 80,
+          message: "Review complete.",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestReview({
+      draft: source.primaryText,
+      sourceUrl: "",
+      model: "deepseek-v4-pro",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/review");
+    expect(JSON.parse(String(init.body))).toEqual({
+      draft: source.primaryText,
+      sourceUrl: "",
+      model: "deepseek-v4-pro",
+    });
+  });
+
   it("preserves allowlisted provider diagnostics for a rejected model", async () => {
     vi.stubGlobal(
       "fetch",
@@ -99,15 +128,15 @@ describe("client API response validation", () => {
         new Response(
           JSON.stringify({
             error: {
-              code: "DEEPSEEK_MODEL_ERROR",
-              message: "DeepSeek rejected the configured model.",
+              code: "XAI_MODEL_ERROR",
+              message: "xAI could not access the selected Grok model.",
               retryable: false,
               stage: "review_request",
-              provider: "DeepSeek",
+              provider: "xAI",
               model: "invalid-model-diagnostic",
-              httpStatus: 400,
+              httpStatus: 404,
               causeSummary:
-                "DeepSeek rejected configured model invalid-model-diagnostic. Supported model IDs are deepseek-v4-pro and deepseek-v4-flash.",
+                "xAI could not find selected model invalid-model-diagnostic. Verify that this API key can access invalid-model-diagnostic.",
             },
           }),
           { status: 502, headers: { "Content-Type": "application/json" } },
@@ -126,14 +155,14 @@ describe("client API response validation", () => {
     }
 
     expect(failure).toMatchObject({
-      code: "DEEPSEEK_MODEL_ERROR",
+      code: "XAI_MODEL_ERROR",
       details: {
         retryable: false,
         stage: "review_request",
-        provider: "DeepSeek",
+        provider: "xAI",
         model: "invalid-model-diagnostic",
-        httpStatus: 400,
-        causeSummary: expect.stringContaining("Supported model IDs"),
+        httpStatus: 404,
+        causeSummary: expect.stringContaining("access invalid-model-diagnostic"),
       },
     });
     expect(JSON.stringify(failure)).not.toContain("Authorization");
@@ -171,6 +200,7 @@ describe("client API response validation", () => {
         lengthOption: "more_detailed",
         instruction: "Focus on the programme benefits.",
       },
+      "deepseek-v4-pro",
     );
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
@@ -193,6 +223,7 @@ describe("client API response validation", () => {
         lengthOption: "more_detailed",
         instruction: "Focus on the programme benefits.",
       },
+      model: "deepseek-v4-pro",
     });
   });
 
