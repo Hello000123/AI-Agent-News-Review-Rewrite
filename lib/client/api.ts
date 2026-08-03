@@ -1,6 +1,7 @@
 import {
   MAX_REQUEST_BYTES,
   apiErrorResponseSchema,
+  directRewriteApiResponseSchema,
   reviewApiResponseSchema,
   rewriteApiResponseSchema,
   rewriteRequestSchema,
@@ -61,7 +62,7 @@ export class ApiRequestError extends Error {
 }
 
 async function postJson(endpoint: string, body: unknown) {
-  const stage = endpoint.endsWith("/rewrite") ? "rewrite_request" : "review_request";
+  const stage = endpoint.includes("/rewrite") ? "rewrite_request" : "review_request";
   // One Review call can wait for a long-running Grok reasoning response;
   // Rewrite can make two sequential provider calls for its validation retry.
   const timeoutMs = stage === "rewrite_request" ? 21 * 60_000 : 11 * 60_000;
@@ -179,7 +180,7 @@ export async function requestReview(input: EditorialInput | string) {
 
 export async function requestRewrite(
   source: SourceSnapshot,
-  review: ReviewResult,
+  review: ReviewResult | null,
   history: readonly RewriteHistoryEntryInput[] = [],
   refinement: RewriteRefinementInput = {},
   model?: SelectableModelId,
@@ -195,6 +196,18 @@ export async function requestRewrite(
   );
   const responseBody = await postJson("/api/rewrite", payload);
   const parsed = rewriteApiResponseSchema.safeParse(responseBody);
+  if (!parsed.success) {
+    throw new ApiRequestError(
+      "INVALID_SERVER_RESPONSE",
+      "The server returned an incomplete rewrite. Please try again.",
+    );
+  }
+  return parsed.data;
+}
+
+export async function requestDirectRewrite(input: EditorialInput) {
+  const responseBody = await postJson("/api/rewrite/direct", input);
+  const parsed = directRewriteApiResponseSchema.safeParse(responseBody);
   if (!parsed.success) {
     throw new ApiRequestError(
       "INVALID_SERVER_RESPONSE",

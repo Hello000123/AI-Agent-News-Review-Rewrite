@@ -1,7 +1,10 @@
 import { getDatabase } from "@/lib/server/auth/database";
 import { requireApiSession } from "@/lib/server/auth/guards";
 import { authErrorResponse } from "@/lib/server/auth/http";
-import { listAccountRequests } from "@/lib/server/auth/repository";
+import {
+  getAccountRoleSummary,
+  listAccountRequests,
+} from "@/lib/server/auth/repository";
 import { jsonResponse } from "@/lib/server/http";
 import { ACCOUNT_REQUEST_STATUSES } from "@/lib/shared/auth-contracts";
 
@@ -18,9 +21,16 @@ export async function GET(request: Request) {
       )
         ? (rawStatus as (typeof ACCOUNT_REQUEST_STATUSES)[number])
         : undefined;
-    const requests = await listAccountRequests(getDatabase(), status);
-    return jsonResponse({ requests });
+    const database = getDatabase();
+    const [requests, summary] = await Promise.all([
+      listAccountRequests(database, status),
+      getAccountRoleSummary(database),
+    ]);
+    return jsonResponse({ requests, summary });
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, {
+      operation: "employee.account-requests.list",
+      request,
+    });
   }
 }

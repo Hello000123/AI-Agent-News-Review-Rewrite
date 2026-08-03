@@ -2,10 +2,14 @@
 
 import { useState } from "react";
 
+import { PasswordInput } from "@/components/auth/password-input";
 import { AuthRequestError, setupPassword } from "@/lib/client/auth-api";
 import {
-  passwordSetupInputSchema,
-  passwordStrengthMessages,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  passwordSetupFormInputSchema,
+  passwordValidationMessages,
+  type PasswordDerivation,
 } from "@/lib/shared/auth-contracts";
 
 function fieldIssues(error: {
@@ -23,22 +27,24 @@ function fieldIssues(error: {
 export function PasswordSetupForm({
   email,
   token,
+  derivation,
 }: {
   email: string;
   token: string;
+  derivation: PasswordDerivation;
 }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const strengthMessages = passwordStrengthMessages(newPassword);
+  const validationMessages = passwordValidationMessages(newPassword);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitting) return;
     setFormError("");
-    const parsed = passwordSetupInputSchema.safeParse({
+    const parsed = passwordSetupFormInputSchema.safeParse({
       token,
       newPassword,
       confirmPassword,
@@ -51,7 +57,7 @@ export function PasswordSetupForm({
     setSubmitting(true);
     setErrors({});
     try {
-      const result = await setupPassword(parsed.data);
+      const result = await setupPassword(parsed.data, derivation);
       window.location.replace(result.redirectTo);
     } catch (error) {
       if (error instanceof AuthRequestError) {
@@ -77,13 +83,12 @@ export function PasswordSetupForm({
       </div>
       <div className="auth-field">
         <label htmlFor="new-password">New password</label>
-        <input
+        <PasswordInput
           id="new-password"
-          type="password"
           autoComplete="new-password"
           value={newPassword}
           disabled={submitting}
-          maxLength={128}
+          maxLength={PASSWORD_MAX_LENGTH + 1}
           aria-invalid={Boolean(errors.newPassword?.length)}
           aria-describedby="password-requirements new-password-error"
           onChange={(event) => {
@@ -94,11 +99,27 @@ export function PasswordSetupForm({
         <div id="password-requirements" className="password-requirements">
           <strong>Password requirements</strong>
           <ul>
-            <li className={newPassword.length >= 12 ? "requirement-met" : ""}>
-              At least 12 characters
+            <li
+              className={
+                newPassword.length >= PASSWORD_MIN_LENGTH &&
+                newPassword.length <= PASSWORD_MAX_LENGTH
+                  ? "requirement-met"
+                  : ""
+              }
+            >
+              More than 8 and fewer than 64 characters
             </li>
-            <li className={strengthMessages.length === 0 && newPassword ? "requirement-met" : ""}>
-              At least three of lowercase, uppercase, numbers, and symbols
+            <li
+              className={
+                newPassword &&
+                !validationMessages.some((message) =>
+                  message.includes("English keyboard"),
+                )
+                  ? "requirement-met"
+                  : ""
+              }
+            >
+              English keyboard characters
             </li>
           </ul>
         </div>
@@ -110,13 +131,12 @@ export function PasswordSetupForm({
       </div>
       <div className="auth-field">
         <label htmlFor="confirm-password">Confirm password</label>
-        <input
+        <PasswordInput
           id="confirm-password"
-          type="password"
           autoComplete="new-password"
           value={confirmPassword}
           disabled={submitting}
-          maxLength={128}
+          maxLength={PASSWORD_MAX_LENGTH + 1}
           aria-invalid={Boolean(errors.confirmPassword?.length)}
           aria-describedby="confirm-password-error"
           onChange={(event) => {

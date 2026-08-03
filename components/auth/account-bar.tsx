@@ -12,7 +12,7 @@ export function AccountBar({ user }: { user: AuthenticatedUser }) {
       <nav aria-label="Account navigation">
         {user.role === "employee" ? (
           <Link className="account-link" href="/employee">
-            Approval portal
+            Admin Panel
           </Link>
         ) : null}
         <div className="account-identity">

@@ -3,7 +3,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ReviewWorkspacePage } from "@/app/page";
+import { ReviewWorkspacePage } from "@/components/review-workspace-page";
 
 describe("home page chrome", () => {
   afterEach(cleanup);

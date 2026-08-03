@@ -1,7 +1,22 @@
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+
 import { AppError } from "@/lib/server/errors";
 
 export type AppEnvironment = "development" | "test" | "production";
 export type EmailDeliveryMode = "preview" | "http";
+
+function getCloudflareString(name: string) {
+  try {
+    const environment = getCloudflareContext().env as unknown as Record<
+      string,
+      unknown
+    >;
+    const value = environment[name];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function integerSetting(
   rawValue: string | undefined,
@@ -46,7 +61,9 @@ export function getPasswordSetupTtlSeconds() {
 }
 
 export function getAuthSecret() {
-  const secret = process.env.AUTH_SECRET?.trim();
+  const secret = (
+    getCloudflareString("AUTH_SECRET") ?? process.env.AUTH_SECRET
+  )?.trim();
   if (secret && secret.length >= 32) return secret;
   if (!isProductionEnvironment()) {
     return "development-only-auth-secret-change-before-production";
@@ -56,6 +73,14 @@ export function getAuthSecret() {
     "Authentication is temporarily unavailable.",
     503,
   );
+}
+
+export function getPasswordPepper() {
+  const pepper = (
+    getCloudflareString("PASSWORD_PEPPER") ?? process.env.PASSWORD_PEPPER
+  )?.trim();
+  if (pepper && pepper.length >= 32) return pepper;
+  return getAuthSecret();
 }
 
 export function getPublicAppUrl() {

@@ -13,6 +13,6 @@ export async function GET(request: Request) {
       expiresAt: session.expiresAt,
     });
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, { operation: "auth.session", request });
   }
 }

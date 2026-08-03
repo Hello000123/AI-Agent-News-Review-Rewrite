@@ -119,71 +119,74 @@ describe("review workflow", () => {
     expect(parsedLow.appliedScoreCap).toBe(59);
   });
 
-  it("enforces category scores that are consistent with major findings and risk flags", () => {
+  it("enforces category scores that are consistent with major writing findings and risks", () => {
     const parsed = parseReviewResponse(
       JSON.stringify({
         ...highReviewModelResponse,
-        factualCompletenessScore: 95,
+        structureScore: 95,
         readinessRisks: {
           ...highReviewModelResponse.readinessRisks,
-          seriousFactualGaps: true,
+          majorStructuralProblems: true,
         },
         findings: [
           {
-            category: "factualCompleteness",
+            category: "structure",
             severity: "major",
-            issue: "Essential opening details are missing.",
-            evidence: "The copy omits the location and opening date.",
-            recommendation: "Verify and add the missing facts.",
+            issue: "The draft has no coherent paragraph sequence.",
+            evidence: "The opening starts mid-event and the conclusion appears before the lead.",
+            recommendation: "Reorder the existing paragraphs into a clear news progression.",
           },
         ],
-        missingInformation: ["The location and opening date are absent."],
-        recommendations: ["Verify and add the missing facts."],
+        recommendations: ["Reorder the existing paragraphs into a clear news progression."],
       }),
       80,
     );
 
-    expect(parsed.factualCompletenessScore).toBe(59);
-    expect(parsed.weightedScore).toBe(83);
+    expect(parsed.structureScore).toBe(59);
+    expect(parsed.weightedScore).toBe(85);
     expect(parsed.overallScore).toBe(59);
     expect(parsed.appliedScoreCap).toBe(59);
     expect(parsed.readinessBand).toBe("WEAK");
     expect(parsed.decision).toBe("REWRITE_REQUIRED");
-    expect(parsed.scoreReasons.factualCompleteness).toContain("Consistency adjustment");
-    expect(parsed.scoreReasons.factualCompleteness).toContain("capped at 59");
-    expect(parsed.scoreReasons.factualCompleteness).toContain(
-      "Essential opening details are missing.",
+    expect(parsed.scoreReasons.structure).toContain("Consistency adjustment");
+    expect(parsed.scoreReasons.structure).toContain("capped at 59");
+    expect(parsed.scoreReasons.structure).toContain(
+      "The draft has no coherent paragraph sequence.",
     );
-    expect(parsed.scoreReasons.factualCompleteness).toContain(
-      "serious factual gaps were flagged",
+    expect(parsed.scoreReasons.structure).toContain(
+      "major structural problems were flagged",
     );
-    expect(parsed.scoreReasons.factualCompleteness).not.toBe(
+    expect(parsed.scoreReasons.structure).not.toBe(
+      highReviewModelResponse.scoreReasons.structure,
+    );
+    expect(parsed.scoreReasons.factualCompleteness).toBe(
       highReviewModelResponse.scoreReasons.factualCompleteness,
     );
-    expect(parsed.scoreReasons.structure).toBe(highReviewModelResponse.scoreReasons.structure);
   });
 
-  it("replaces every rationale lowered by a risk-only consistency adjustment", () => {
+  it("disables legacy fact-checking risks without lowering or capping scores", () => {
     const parsed = parseReviewResponse(
       JSON.stringify({
         ...highReviewModelResponse,
         readinessRisks: {
           ...highReviewModelResponse.readinessRisks,
+          severelyIncompleteOrUnreliable: true,
+          seriousFactualGaps: true,
           unsupportedClaims: true,
         },
       }),
       80,
     );
 
-    expect(parsed.factualCompletenessScore).toBe(59);
-    expect(parsed.professionalismScore).toBe(59);
-    expect(parsed.scoreReasons.factualCompleteness).toContain(
-      "material unsupported claims were flagged",
-    );
-    expect(parsed.scoreReasons.professionalism).toContain(
-      "material unsupported claims were flagged",
-    );
-    expect(parsed.scoreReasons.clarity).toBe(highReviewModelResponse.scoreReasons.clarity);
+    expect(parsed.readinessRisks).toEqual(highReviewModelResponse.readinessRisks);
+    expect(parsed.factualCompletenessScore).toBe(91);
+    expect(parsed.professionalismScore).toBe(91);
+    expect(parsed.weightedScore).toBe(91);
+    expect(parsed.overallScore).toBe(91);
+    expect(parsed.appliedScoreCap).toBeNull();
+    expect(parsed.scoreCapReasons).toEqual([]);
+    expect(parsed.decision).toBe("PASS");
+    expect(parsed.scoreReasons).toEqual(highReviewModelResponse.scoreReasons);
   });
 
   it("fails safely on malformed JSON or an incomplete six-category response", () => {

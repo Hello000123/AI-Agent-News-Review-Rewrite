@@ -95,7 +95,7 @@ function makeReviewResult(
     recommendations:
       options.findings?.length || options.missingInformation?.length
         ? ["Resolve the structured findings before publication."]
-        : ["[Optional - no score effect] Complete a final source check before publication."],
+        : ["[Optional - no score effect] Complete a final proofreading pass before publication."],
   };
 }
 
@@ -137,7 +137,7 @@ function expectedResultForCase(id: string) {
           professionalismScore: 30,
           attributionScore: 45,
         },
-        risks: { severelyIncompleteOrUnreliable: true, majorStructuralProblems: true },
+        risks: { majorStructuralProblems: true },
         findings: [finding("structure", "critical")],
         appliedScoreCap: 39,
       });
@@ -157,32 +157,27 @@ function expectedResultForCase(id: string) {
     case "missing_core_facts":
       return makeReviewResult({
         scores: {
-          factualCompletenessScore: 45,
+          factualCompletenessScore: 70,
           structureScore: 75,
           clarityScore: 80,
           languageQualityScore: 85,
           professionalismScore: 80,
-          attributionScore: 45,
+          attributionScore: 80,
         },
-        risks: { seriousFactualGaps: true },
-        findings: [finding("factualCompleteness")],
-        missingInformation: ["The responsible organisation, location and opening date are absent."],
-        appliedScoreCap: 59,
+        findings: [finding("factualCompleteness", "moderate")],
+        missingInformation: ["The opening information is listed as unavailable, leaving the announcement incomplete as written."],
+        appliedScoreCap: 74,
       });
     case "missing_time_context":
       return makeReviewResult({
-        scores: { factualCompletenessScore: 80 },
-        findings: [
-          {
-            category: "factualCompleteness",
-            severity: "minor",
-            issue: "The programme launch timing is missing.",
-            evidence: "The copy says the programme will begin but does not say when.",
-            recommendation: "Add meaningful time context if it is available without inventing a date.",
-          },
-        ],
-        missingInformation: ["Meaningful timing for the programme launch is not provided."],
-        appliedScoreCap: 89,
+        scores: {
+          factualCompletenessScore: 90,
+          structureScore: 90,
+          clarityScore: 90,
+          languageQualityScore: 90,
+          professionalismScore: 90,
+          attributionScore: 90,
+        },
       });
     case "contradictory_time_context":
       return makeReviewResult({
@@ -192,7 +187,6 @@ function expectedResultForCase(id: string) {
           clarityScore: 70,
           professionalismScore: 80,
         },
-        risks: { seriousFactualGaps: true },
         findings: [
           {
             category: "factualCompleteness",
@@ -207,16 +201,13 @@ function expectedResultForCase(id: string) {
     case "unsupported_material_claims":
       return makeReviewResult({
         scores: {
-          factualCompletenessScore: 55,
-          structureScore: 85,
-          clarityScore: 85,
-          languageQualityScore: 90,
-          professionalismScore: 55,
-          attributionScore: 45,
+          factualCompletenessScore: 92,
+          structureScore: 92,
+          clarityScore: 92,
+          languageQualityScore: 92,
+          professionalismScore: 92,
+          attributionScore: 92,
         },
-        risks: { unsupportedClaims: true },
-        findings: [finding("factualCompleteness", "major")],
-        appliedScoreCap: 59,
       });
     case "severely_unreliable_fragment":
       return makeReviewResult({
@@ -228,8 +219,8 @@ function expectedResultForCase(id: string) {
           professionalismScore: 20,
           attributionScore: 20,
         },
-        risks: { severelyIncompleteOrUnreliable: true, unsupportedClaims: true },
-        findings: [finding("factualCompleteness", "critical")],
+        risks: { majorStructuralProblems: true, veryPoorLanguage: true },
+        findings: [finding("structure", "critical")],
         appliedScoreCap: 39,
       });
     case "traditional_multiple_quotation_styles":
@@ -264,7 +255,8 @@ describe("review scoring evaluation set", () => {
       "high_quality",
       "poor_draft",
       "missing_facts",
-      "unsupported_claims",
+      "fictional_claims",
+      "unverifiable_claims",
       "severely_deficient",
       "publisher_independence",
       "multiple_quotations",
@@ -301,7 +293,9 @@ describe("review scoring evaluation set", () => {
     expect(publisherControl?.request.draft).toContain("未核實");
     expect(publisherControl?.request.draft).toContain("唔可以刊登");
     expect(publisherControl?.expected.requiredRisks).toMatchObject({
-      severelyIncompleteOrUnreliable: true,
+      severelyIncompleteOrUnreliable: false,
+      seriousFactualGaps: false,
+      unsupportedClaims: false,
       majorStructuralProblems: true,
     });
     expect(publisherControl?.inputKind).toBe("text_with_reference");
@@ -357,7 +351,7 @@ describe("review scoring evaluation set", () => {
     }
   });
 
-  it("requires expected ranges, bands, categories, risks, caps and findings", () => {
+  it("requires expected ranges, bands, categories, writing risks, caps and findings", () => {
     const highCase = reviewEvaluationCases.find(({ id }) => id === "english_high_quality")!;
     const cappedHigh = makeReviewResult({
       appliedScoreCap: 89,
@@ -378,17 +372,23 @@ describe("review scoring evaluation set", () => {
     const unsupportedCase = reviewEvaluationCases.find(
       ({ id }) => id === "unsupported_material_claims",
     )!;
-    const unflagged = makeReviewResult({
-      scores: { factualCompletenessScore: 59, attributionScore: 59 },
-      findings: [finding("factualCompleteness")],
-      appliedScoreCap: 59,
+    const incorrectlyFlagged = makeReviewResult({
+      scores: {
+        factualCompletenessScore: 92,
+        structureScore: 92,
+        clarityScore: 92,
+        languageQualityScore: 92,
+        professionalismScore: 92,
+        attributionScore: 92,
+      },
+      risks: { unsupportedClaims: true },
     });
-    expect(evaluateReviewResult(unsupportedCase, unflagged).failures).toContain(
-      "readinessRisks.unsupportedClaims must be true.",
+    expect(evaluateReviewResult(unsupportedCase, incorrectlyFlagged).failures).toContain(
+      "readinessRisks.unsupportedClaims must be false.",
     );
   });
 
-  it("rejects exact-date-only warnings for valid time context and requires chronology feedback", () => {
+  it("rejects missing-time warnings without an internal issue and requires contradiction feedback", () => {
     const relativeCase = reviewEvaluationCases.find(
       ({ id }) => id === "english_relative_yesterday",
     )!;
@@ -402,27 +402,40 @@ describe("review scoring evaluation set", () => {
     ).toBe(true);
 
     const missingCase = reviewEvaluationCases.find(({ id }) => id === "missing_time_context")!;
-    const missingWithoutChronologyFeedback = {
+    const inappropriateMissingTimeWarning = {
       ...expectedResultForCase(missingCase.id),
-      findings: [finding("factualCompleteness", "minor")],
+      missingInformation: ["The exact date is missing from the announcement."],
+    } satisfies ReviewResult;
+    expect(
+      evaluateReviewResult(missingCase, inappropriateMissingTimeWarning).failures.some((failure) =>
+        failure.startsWith("Feedback matches forbidden pattern"),
+      ),
+    ).toBe(true);
+
+    const contradictionCase = reviewEvaluationCases.find(
+      ({ id }) => id === "contradictory_time_context",
+    )!;
+    const contradictionWithoutFeedback = {
+      ...expectedResultForCase(contradictionCase.id),
+      findings: [finding("factualCompleteness", "major")],
       missingInformation: [],
       recommendations: ["Resolve the structured finding before publication."],
     } satisfies ReviewResult;
     expect(
-      evaluateReviewResult(missingCase, missingWithoutChronologyFeedback).failures.some((failure) =>
-        failure.startsWith("Feedback does not match required pattern"),
+      evaluateReviewResult(contradictionCase, contradictionWithoutFeedback).failures.some(
+        (failure) => failure.startsWith("Feedback does not match required pattern"),
       ),
     ).toBe(true);
   });
 
   it("detects inconsistent weighted, capped and decision values", () => {
     const testCase = reviewEvaluationCases.find(
-      ({ id }) => id === "unsupported_material_claims",
+      ({ id }) => id === "english_poor_draft",
     )!;
     const inconsistent = makeReviewResult({
       scores: { factualCompletenessScore: 55, attributionScore: 45 },
-      risks: { unsupportedClaims: true },
-      findings: [finding("factualCompleteness")],
+      risks: { majorStructuralProblems: true },
+      findings: [finding("structure")],
       appliedScoreCap: 59,
       weightedScore: 88,
       overallScore: 60,

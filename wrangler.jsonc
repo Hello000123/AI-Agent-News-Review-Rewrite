@@ -11,12 +11,32 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "vars": {
+    "APP_ENV": "production",
+    "PUBLIC_APP_URL": "https://pressready-review.931smd-cloudflare-account.workers.dev",
+    "SESSION_TTL_SECONDS": "43200",
+    "PASSWORD_SETUP_TTL_SECONDS": "86400",
+    "ACCOUNT_APPROVAL_NOTIFICATION_EMAIL": "jimmy.zhang@931smd.com",
+    "EMAIL_FROM_ADDRESS": "onboarding@resend.dev",
+    "EMAIL_FROM_NAME": "931SMD-Testing",
+    "EMAIL_DELIVERY_MODE": "http",
+    "EMAIL_PROVIDER_API_URL": "https://api.resend.com/emails",
+    "EMAIL_PROVIDER_AUTH_HEADER": "Authorization",
+    "EMAIL_PROVIDER_AUTH_SCHEME": "Bearer",
+    "AI_MODEL": "grok-4.5"
+  },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "pressready-auth",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "b4865986-9ed1-430a-945a-2675ca22a2ed",
       "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ACCOUNT_DOCUMENTS",
+      "bucket_name": "pressready-account-documents"
     }
   ],
   "observability": {

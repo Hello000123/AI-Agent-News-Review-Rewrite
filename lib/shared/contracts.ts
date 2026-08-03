@@ -11,6 +11,8 @@ export const MAX_REWRITE_INSTRUCTION_CHARS = 4_000;
 export const MAX_REWRITE_HISTORY_ENTRIES = 24;
 
 export const REVIEW_SCORE_WEIGHTS = {
+  // Legacy public key: the review prompt defines this as writing completeness
+  // and internal consistency only, never external factual accuracy or support.
   factualCompletenessScore: 0.25,
   structureScore: 0.2,
   clarityScore: 0.15,
@@ -89,6 +91,8 @@ export const reviewFindingSchema = z
 
 export const readinessRisksSchema = z
   .object({
+    // These three legacy fields remain in the API schema for compatibility.
+    // The writing-only review parser normalizes them to false.
     severelyIncompleteOrUnreliable: z.boolean(),
     seriousFactualGaps: z.boolean(),
     unsupportedClaims: z.boolean(),
@@ -165,7 +169,7 @@ export const editorialInputSchema = z
   .strict()
   .refine(
     ({ draft, sourceUrl }) => Boolean(draft.trim() || sourceUrl.trim()),
-    "Enter draft text or a source URL before requesting a review.",
+    "Enter draft text or a source URL before requesting AI assistance.",
   );
 
 export const sourceSnapshotSchema = z
@@ -235,7 +239,7 @@ export const rewriteContextSchema = z
 export const rewriteRequestSchema = rewriteContextSchema
   .extend({
     source: sourceSnapshotSchema,
-    review: reviewResultSchema,
+    review: reviewResultSchema.nullable().default(null),
     model: selectableModelSchema.optional(),
   })
   .strict();
@@ -284,6 +288,10 @@ export const rewriteApiResponseSchema = z
   })
   .strict();
 
+export const directRewriteApiResponseSchema = rewriteApiResponseSchema
+  .extend({ source: sourceSnapshotSchema })
+  .strict();
+
 export const apiErrorResponseSchema = z
   .object({
     error: z
@@ -321,4 +329,5 @@ export type RewriteContext = z.infer<typeof rewriteContextSchema>;
 export type RewriteRequest = z.infer<typeof rewriteRequestSchema>;
 export type QuotationIssue = z.infer<typeof quotationIssueSchema>;
 export type RewriteApiResponse = z.infer<typeof rewriteApiResponseSchema>;
+export type DirectRewriteApiResponse = z.infer<typeof directRewriteApiResponseSchema>;
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;

@@ -5,10 +5,17 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PressReleaseWorkspace } from "@/components/press-release-workspace";
-import { ApiRequestError, requestReview, requestRewrite } from "@/lib/client/api";
+import {
+  ApiRequestError,
+  requestDirectRewrite,
+  requestReview,
+  requestRewrite,
+} from "@/lib/client/api";
+import { requestFileExtraction } from "@/lib/client/file-api";
 import { REWRITE_SESSION_STORAGE_KEY } from "@/lib/client/rewrite-session";
 import type {
   ReviewApiResponse,
+  DirectRewriteApiResponse,
   RewriteApiResponse,
   RewriteLengthOption,
   SourceSnapshot,
@@ -19,13 +26,20 @@ vi.mock("@/lib/client/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client/api")>();
   return {
     ...actual,
+    requestDirectRewrite: vi.fn(),
     requestReview: vi.fn(),
     requestRewrite: vi.fn(),
   };
 });
 
+vi.mock("@/lib/client/file-api", () => ({
+  requestFileExtraction: vi.fn(),
+}));
+
 const reviewMock = vi.mocked(requestReview);
+const directRewriteMock = vi.mocked(requestDirectRewrite);
 const rewriteMock = vi.mocked(requestRewrite);
+const fileExtractionMock = vi.mocked(requestFileExtraction);
 
 function sourceFor(text: string): SourceSnapshot {
   return { primaryText: text, userDraft: text, imageContext: [] };
@@ -42,6 +56,13 @@ function reviewResponse(review = highReview, text = "Original supported facts.")
 
 function rewriteResponse(finalText: string): RewriteApiResponse {
   return { finalText, validation: { status: "passed", attempts: 1 } };
+}
+
+function directRewriteResponse(
+  finalText: string,
+  source: SourceSnapshot,
+): DirectRewriteApiResponse {
+  return { ...rewriteResponse(finalText), source };
 }
 
 function deferred<T>() {
@@ -98,6 +119,51 @@ describe("score-first workspace", () => {
     });
   });
 
+  it("asks before appending or replacing extracted content and never loses existing text", async () => {
+    fileExtractionMock.mockResolvedValue({
+      file: {
+        name: "briefing.docx",
+        type: "Microsoft Word",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        size: 1_024,
+        status: "ready",
+      },
+      content: "First extracted paragraph.\nSecond extracted paragraph.",
+      truncated: false,
+    });
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+    const editor = screen.getByRole("textbox", { name: /News draft/u });
+    await user.type(editor, "Existing draft text.");
+
+    const file = new File(["valid"], "briefing.docx", {
+      type:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    await user.upload(document.querySelector("#draft-file") as HTMLInputElement, file);
+
+    expect(await screen.findByText("Keep the current draft?")).toBeTruthy();
+    expect((editor as HTMLTextAreaElement).value).toBe("Existing draft text.");
+    await user.click(screen.getByRole("button", { name: "Append to draft" }));
+    expect((editor as HTMLTextAreaElement).value).toBe(
+      "Existing draft text.\n\nFirst extracted paragraph.\nSecond extracted paragraph.",
+    );
+  });
+
+  it("rejects an unsupported Draft attachment before sending it", async () => {
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+    const file = new File(["plain"], "notes.txt", { type: "text/plain" });
+    fireEvent.change(document.querySelector("#draft-file") as HTMLInputElement, {
+      target: { files: [file] },
+    });
+
+    expect(
+      await screen.findByText(/Unsupported file format/u),
+    ).toBeTruthy();
+    expect(fileExtractionMock).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
@@ -132,7 +198,43 @@ describe("score-first workspace", () => {
     expect(rewriteMock).not.toHaveBeenCalled();
   });
 
-  it("sends the URL without exposing picture or output-language inputs", async () => {
+  it("goes straight from Source Input to a rewrite and refines without review feedback", async () => {
+    const source = sourceFor("Direct rewrite facts.");
+    const firstText = "Direct headline\n\nDirect rewritten report.";
+    const secondText = "Refined direct headline\n\nRefined direct rewritten report.";
+    directRewriteMock.mockResolvedValue(directRewriteResponse(firstText, source));
+    rewriteMock.mockResolvedValue(rewriteResponse(secondText));
+    const user = userEvent.setup();
+    render(<PressReleaseWorkspace initialPassScore={80} />);
+
+    await user.type(screen.getByRole("textbox", { name: /News draft/u }), source.primaryText);
+    await user.click(screen.getByRole("button", { name: "Rewrite Draft" }));
+
+    expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
+      .toBe(firstText);
+    expect(reviewMock).not.toHaveBeenCalled();
+    expect(directRewriteMock).toHaveBeenCalledWith({
+      draft: source.primaryText,
+      sourceUrl: "",
+      model: "grok-4.5",
+    });
+    expect(screen.queryByText("Score rationale")).toBeNull();
+
+    await openRefinement(user);
+    await user.type(screen.getByLabelText(/Improvement instructions/u), "Tighten the lead.");
+    await user.click(screen.getByRole("button", { name: "Rewrite Again" }));
+    expect((await screen.findByLabelText("Final news report text") as HTMLTextAreaElement).value)
+      .toBe(secondText);
+    expect(rewriteMock).toHaveBeenCalledWith(
+      source,
+      null,
+      [{ rewrittenText: firstText, lengthOption: null, instruction: "" }],
+      { lengthOption: null, instruction: "Tighten the lead." },
+      "grok-4.5",
+    );
+  });
+
+  it("sends the URL while exposing the new document attachment input", async () => {
     reviewMock.mockResolvedValue(reviewResponse(highReview, "Retrieved article text."));
     const user = userEvent.setup();
     render(<PressReleaseWorkspace initialPassScore={80} />);
@@ -140,7 +242,10 @@ describe("score-first workspace", () => {
     expect(screen.queryByLabelText("Supporting images (optional)")).toBeNull();
     expect(screen.queryByLabelText("Image captions or OCR text")).toBeNull();
     expect(screen.queryByLabelText("Output language")).toBeNull();
-    expect(document.querySelector('input[type="file"]')).toBeNull();
+    const fileInput = document.querySelector('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    expect(fileInput?.getAttribute("accept")).toContain(".pdf");
+    expect(fileInput?.getAttribute("accept")).toContain(".xlsx");
 
     await user.type(screen.getByLabelText("Public article URL"), "https://example.com/article");
     await user.click(screen.getByRole("button", { name: "Review Draft" }));

@@ -25,7 +25,7 @@ export default async function EmployeeRequestPage({
       <main className="employee-page">
         <div className="employee-shell">
           <Link className="employee-back-link" href="/employee">
-            ← Back to account approvals
+            ← Back to Admin Panel
           </Link>
           <EmployeeRequestDetails initialRequest={request} />
         </div>

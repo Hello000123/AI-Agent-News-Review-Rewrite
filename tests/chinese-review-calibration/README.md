@@ -5,7 +5,7 @@ This isolated test suite sends 150 fictional Traditional Chinese (Hong Kong) dra
 ## Files
 
 - `chinese_review_drafts_from_txt.csv` — default 150-draft dataset converted from the supplied pipe-delimited TXT file, encoded as UTF-8 with BOM.
-- `chinese_review_drafts.csv` — reusable quote-all reference dataset, encoded as UTF-8 with BOM.
+- `chinese_review_drafts.csv` — reusable completed reference dataset, including the 30 supplied `Good` drafts, encoded as UTF-8 with BOM.
 - `convert-pipe-dataset.mjs` — validates and converts future pipe-delimited TXT datasets.
 - `run-chinese-review-test.mjs` — command-line runner.
 - `review-test-lib.mjs` — validation, concurrency, retry, persistence, resume, and analysis logic.
@@ -15,16 +15,35 @@ This isolated test suite sends 150 fictional Traditional Chinese (Hong Kong) dra
 - `chinese_review_responses.jsonl` — append-only complete local `/api/review` response log.
 - `chinese_review_test_report.xlsx` — report with Drafts, Results, Summary, Category Summary, and Error Log sheets.
 
-The public review response contains six component scores, `weightedScore`, optional `appliedScoreCap`, and the backend-authoritative `overallScore`. The runner preserves all of these and uses `review.overallScore` for expected-range evaluation.
+The public review response contains six component scores, `weightedScore`, optional `appliedScoreCap`, and the backend-authoritative `overallScore`. The legacy `factualCompletenessScore` column now measures content completeness and internal consistency as writing only; it does not measure factual accuracy or external support. The runner preserves all fields and uses `review.overallScore` for expected-range evaluation.
 
 ## Requirements and configuration
 
 - Node.js 22.13 or later (the project already requires this).
 - Project dependencies installed with `npm install`.
 - A running local application. Next.js reads the existing server-only Grok settings from `.env.local`; the runner never hard-codes or prints the API key.
+- An active local client or employee account for live runs. The runner signs in through the normal `POST /api/auth/login` route, then sends the returned session cookie, same-origin header, and matching CSRF value to `POST /api/review`. Dry-run and report-only modes do not sign in.
 - Workbook generation uses the Codex-bundled `@oai/artifact-tool` runtime. The runner auto-discovers the local bundle. If it is elsewhere, set `CODEX_ARTIFACT_NODE_MODULES` to its `node_modules` directory.
 
 Before a live test, the runner asks whether to use Grok 4.5 or DeepSeek V4 Pro. The selected model ID is sent in every `/api/review` request and recorded in the results. Use `--model` (or `EVAL_MODEL`) to make the selection non-interactively. `AI_MODEL` in the current environment or `.env.local` supplies the menu default only. Dry-run and report-only commands use that default without prompting because they make no AI request.
+
+Keep benchmark credentials in process environment variables or in the ignored
+project-root file `.env.benchmark.local`:
+
+```text
+REVIEW_EVAL_EMAIL=chinese-review-benchmark@local.test
+REVIEW_EVAL_PASSWORD=<local test account password>
+# Optional only when the application canonical origin differs from --base-url:
+REVIEW_EVAL_ORIGIN=http://localhost:3000
+```
+
+Use a dedicated test-only account. Do not place its password in a command
+argument, committed file, result CSV, or response log. The runner reports only
+that authentication succeeded and the returned role; it does not print the
+email, password, session cookie, or CSRF value.
+For local Next development, the runner otherwise uses `PUBLIC_APP_URL` from
+`.env.local` as the same-origin value and continues to use `--base-url` as the
+network destination.
 
 ## Safe resume and change detection
 
@@ -57,6 +76,12 @@ Validate all 150 drafts and rebuild reports without calling the Review Agent or 
 node tests\chinese-review-calibration\run-chinese-review-test.mjs --dry-run
 ```
 
+Validate the completed reusable dataset specifically:
+
+```powershell
+node tests\chinese-review-calibration\run-chinese-review-test.mjs --dry-run --dataset tests\chinese-review-calibration\chinese_review_drafts.csv --allow-dataset-quality-warnings
+```
+
 Run one draft from each category (five paid review requests unless already successful):
 
 ```powershell
@@ -73,6 +98,12 @@ Run the complete test (150 paid review requests at the default one repeat). Obta
 
 ```powershell
 node tests\chinese-review-calibration\run-chinese-review-test.mjs
+```
+
+To run the complete test against the completed reusable dataset, add:
+
+```powershell
+--dataset tests\chinese-review-calibration\chinese_review_drafts.csv --allow-dataset-quality-warnings
 ```
 
 Resume an interrupted complete test. This is intentionally the same command; successful draft/repeat pairs with matching fingerprints are skipped, while errors and stale rows are retried:

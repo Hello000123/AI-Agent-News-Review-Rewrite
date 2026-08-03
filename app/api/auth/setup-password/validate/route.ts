@@ -22,6 +22,9 @@ export async function POST(request: Request) {
     }
     return jsonResponse(token);
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, {
+      operation: "auth.password-setup.validate",
+      request,
+    });
   }
 }

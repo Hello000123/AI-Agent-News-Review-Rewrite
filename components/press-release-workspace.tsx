@@ -5,7 +5,14 @@ import { useEffect, useRef, useState } from "react";
 import { OutputPanel } from "@/components/output-panel";
 import { QuotationFailurePanel } from "@/components/quotation-failure-panel";
 import { ReviewSummary } from "@/components/review-summary";
-import { ApiRequestError, requestReview, requestRewrite } from "@/lib/client/api";
+import {
+  ApiRequestError,
+  requestDirectRewrite,
+  requestReview,
+  requestRewrite,
+} from "@/lib/client/api";
+import { AuthRequestError } from "@/lib/client/auth-api";
+import { requestFileExtraction } from "@/lib/client/file-api";
 import {
   clearRewriteSession,
   loadRewriteSession,
@@ -22,6 +29,11 @@ import {
   type SourceSnapshot,
 } from "@/lib/shared/contracts";
 import {
+  FILE_UPLOAD_ACCEPT,
+  SUPPORTED_UPLOAD_HELP,
+  validateUploadMetadata,
+} from "@/lib/shared/file-upload";
+import {
   DEFAULT_SELECTABLE_MODEL,
   SELECTABLE_MODELS,
   selectableModelById,
@@ -29,6 +41,15 @@ import {
 } from "@/lib/shared/models";
 
 type ProcessingState = "idle" | "reviewing" | "rewriting";
+
+type DraftAttachmentState = {
+  name: string;
+  type: string;
+  size: number;
+  status: "processing" | "awaiting-choice" | "added" | "error";
+  error?: string;
+  truncated?: boolean;
+};
 
 type RewriteState =
   | { status: "idle" }
@@ -118,8 +139,14 @@ export function PressReleaseWorkspace({
   const [copied, setCopied] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [sessionHydrated, setSessionHydrated] = useState(false);
+  const [draftAttachment, setDraftAttachment] =
+    useState<DraftAttachmentState | null>(null);
+  const [pendingExtractedText, setPendingExtractedText] = useState("");
+  const [uploadDragActive, setUploadDragActive] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const draftRef = useRef(draft);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLTextAreaElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
@@ -127,9 +154,14 @@ export function PressReleaseWorkspace({
   const requestSequenceRef = useRef(0);
   const activeRequestRef = useRef(0);
   const lastRefinementRef = useRef<RewriteRefinement>(EMPTY_REWRITE_REFINEMENT);
+  const uploadSequenceRef = useRef(0);
   const busy = processing !== "idle";
   const words = countWords(draft);
   const selectedModelDetails = selectableModelById(selectedModel);
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   useEffect(() => {
     if (processing === "idle") return;
@@ -194,7 +226,6 @@ export function PressReleaseWorkspace({
   useEffect(() => {
     if (
       !sessionHydrated ||
-      !review ||
       !reviewedSource ||
       !reviewedInputSignature ||
       inputSignature({ draft, sourceUrl, model: selectedModel }) !== reviewedInputSignature
@@ -282,6 +313,97 @@ export function PressReleaseWorkspace({
     markSourceChanged();
   }
 
+  function removeDraftAttachment() {
+    uploadSequenceRef.current += 1;
+    setDraftAttachment(null);
+    setPendingExtractedText("");
+    setUploadDragActive(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function processDraftFile(file: File) {
+    if (busy) return;
+    const validation = validateUploadMetadata(file);
+    if ("error" in validation) {
+      setDraftAttachment({
+        name: file.name || "Selected file",
+        type: file.type || "Unknown type",
+        size: file.size,
+        status: "error",
+        error: validation.error,
+      });
+      setPendingExtractedText("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    const requestId = ++uploadSequenceRef.current;
+    setDraftAttachment({
+      name: file.name,
+      type: validation.formatLabel,
+      size: file.size,
+      status: "processing",
+    });
+    setPendingExtractedText("");
+    setInputError("");
+    try {
+      const result = await requestFileExtraction(file);
+      if (uploadSequenceRef.current !== requestId) return;
+      const currentDraft = draftRef.current;
+      const nextAttachment: DraftAttachmentState = {
+        name: result.file.name,
+        type: result.file.type,
+        size: result.file.size,
+        status: currentDraft.trim() ? "awaiting-choice" : "added",
+        truncated: result.truncated,
+      };
+      setDraftAttachment(nextAttachment);
+      if (currentDraft.trim()) {
+        setPendingExtractedText(result.content);
+      } else {
+        draftRef.current = result.content;
+        setDraft(result.content);
+        markSourceChanged();
+        requestAnimationFrame(() => inputRef.current?.focus());
+      }
+    } catch (error) {
+      if (uploadSequenceRef.current !== requestId) return;
+      setDraftAttachment({
+        name: file.name,
+        type: validation.formatLabel,
+        size: file.size,
+        status: "error",
+        error:
+          error instanceof AuthRequestError
+            ? error.message
+            : "The file could not be processed. Try another file.",
+      });
+    }
+  }
+
+  function applyExtractedContent(mode: "append" | "replace") {
+    if (!pendingExtractedText || !draftAttachment) return;
+    const nextDraft =
+      mode === "append"
+        ? `${draft.trimEnd()}\n\n${pendingExtractedText}`
+        : pendingExtractedText;
+    if (nextDraft.length > MAX_DRAFT_CHARS) {
+      setDraftAttachment({
+        ...draftAttachment,
+        status: "awaiting-choice",
+        error:
+          "Appending this file would exceed the 50,000-character draft limit. Replace the draft or shorten the existing text first.",
+      });
+      return;
+    }
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+    setPendingExtractedText("");
+    setDraftAttachment({ ...draftAttachment, status: "added", error: undefined });
+    markSourceChanged();
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }
+
   function validateInput(input: EditorialInput) {
     if (!input.draft.trim() && !input.sourceUrl.trim()) {
       return "Enter draft text or a source URL before requesting a review.";
@@ -348,8 +470,89 @@ export function PressReleaseWorkspace({
     }
   }
 
+  async function handleDirectRewrite() {
+    if (inFlightRef.current) return;
+
+    const input = currentInput();
+    const validationError = validateInput(input);
+    if (validationError) {
+      setInputError(validationError);
+      inputRef.current?.focus();
+      return;
+    }
+
+    const requestId = ++requestSequenceRef.current;
+    activeRequestRef.current = requestId;
+    inFlightRef.current = true;
+    setInputError("");
+    setRequestError(null);
+    setCopied(false);
+    setReview(null);
+    setReviewedSource(null);
+    setReviewedInputSignature("");
+    setRewriteState({ status: "loading", attemptId: requestId });
+    setRewriteHistory([]);
+    setMessage("");
+    setPassScore(initialPassScore);
+    lastRefinementRef.current = EMPTY_REWRITE_REFINEMENT;
+    clearRewriteSession();
+    setModelPickerOpen(false);
+    setElapsedSeconds(0);
+    setProcessing("rewriting");
+
+    try {
+      const result = await requestDirectRewrite(input);
+      if (activeRequestRef.current !== requestId) return;
+      const firstTurn: CompletedRewriteTurn = {
+        rewrittenText: result.finalText,
+        lengthOption: null,
+        instruction: "",
+      };
+      setReviewedInputSignature(inputSignature(input));
+      setReviewedSource(result.source);
+      setRewriteHistory([firstTurn]);
+      setRewriteState({
+        status: "success",
+        attemptId: requestId,
+        text: result.finalText,
+        validation: result.validation,
+      });
+      requestAnimationFrame(() => resultRef.current?.focus());
+    } catch (error) {
+      if (activeRequestRef.current !== requestId) return;
+      if (
+        error instanceof ApiRequestError &&
+        error.code === "INEXACT_REWRITE_QUOTATION" &&
+        error.details?.quotationIssues?.length
+      ) {
+        setRewriteState({
+          status: "quotation-failed",
+          attemptId: requestId,
+          issues: error.details.quotationIssues,
+          candidateText: error.details.candidateText,
+          attempts: error.details.attempts,
+        });
+      } else {
+        setRewriteState({ status: "idle" });
+        showRequestError({
+          message: messageForError(error),
+          retryable: error instanceof ApiRequestError
+            ? error.details?.retryable ?? error.code !== "VALIDATION_ERROR"
+            : true,
+          context: "rewrite",
+          diagnostics: error instanceof ApiRequestError ? error.details : undefined,
+        });
+      }
+    } finally {
+      if (activeRequestRef.current === requestId) {
+        inFlightRef.current = false;
+        setProcessing("idle");
+      }
+    }
+  }
+
   async function handleRewrite(refinement: RewriteRefinement) {
-    if (inFlightRef.current || !review || !reviewedSource || reviewIsStale) return;
+    if (inFlightRef.current || !reviewedSource || reviewIsStale) return;
     if (rewriteHistory.length >= MAX_REWRITE_HISTORY_ENTRIES) {
       showRequestError({
         message:
@@ -435,6 +638,7 @@ export function PressReleaseWorkspace({
   }
 
   function handleRetryRewrite() {
+    if (!reviewedSource) return handleDirectRewrite();
     return handleRewrite(lastRefinementRef.current);
   }
 
@@ -467,6 +671,8 @@ export function PressReleaseWorkspace({
   }
 
   function handleStartNew() {
+    removeDraftAttachment();
+    draftRef.current = "";
     setDraft("");
     setSourceUrl("");
     setInputError("");
@@ -570,6 +776,7 @@ export function PressReleaseWorkspace({
           value={draft}
           onChange={(event) => {
             if (inFlightRef.current) return;
+            draftRef.current = event.target.value;
             setDraft(event.target.value);
             markSourceChanged();
           }}
@@ -588,6 +795,128 @@ export function PressReleaseWorkspace({
             {MAX_DRAFT_CHARS.toLocaleString("en-US")} characters
           </p>
         </div>
+
+        <div
+          className={
+            "file-upload-zone draft-upload-zone " +
+            (uploadDragActive ? "file-upload-zone-active" : "") +
+            (draftAttachment?.status === "error" ? " file-upload-zone-error" : "")
+          }
+          onDragEnter={(event) => {
+            event.preventDefault();
+            if (!busy) setUploadDragActive(true);
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            if (!busy) setUploadDragActive(true);
+          }}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setUploadDragActive(false);
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setUploadDragActive(false);
+            const file = event.dataTransfer.files?.[0];
+            if (file) void processDraftFile(file);
+          }}
+        >
+          <input
+            ref={fileInputRef}
+            id="draft-file"
+            className="visually-hidden-file-input"
+            type="file"
+            accept={FILE_UPLOAD_ACCEPT}
+            disabled={busy}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void processDraftFile(file);
+            }}
+          />
+          <div>
+            <strong>Attach a file or drop it here</strong>
+            <p>{SUPPORTED_UPLOAD_HELP}</p>
+          </div>
+          <label className="button button-secondary file-picker-button" htmlFor="draft-file">
+            Choose file
+          </label>
+        </div>
+
+        {draftAttachment ? (
+          <div className="attachment-row draft-attachment-row" aria-live="polite">
+            <div className="attachment-icon" aria-hidden="true">DOC</div>
+            <div className="attachment-details">
+              <strong>{draftAttachment.name}</strong>
+              <span>
+                {draftAttachment.type} ·{" "}
+                {(draftAttachment.size / 1024).toLocaleString("en-US", {
+                  maximumFractionDigits: 1,
+                })} KB
+              </span>
+              <span
+                className={
+                  "attachment-status " +
+                  (draftAttachment.status === "error" || draftAttachment.error
+                    ? "attachment-status-error"
+                    : "")
+                }
+              >
+                {draftAttachment.status === "processing" ? (
+                  <>
+                    <span className="spinner" aria-hidden="true" />
+                    Extracting readable content
+                  </>
+                ) : draftAttachment.status === "awaiting-choice" ? (
+                  draftAttachment.error || "Content extracted — choose how to add it"
+                ) : draftAttachment.status === "added" ? (
+                  "Content added to the draft editor"
+                ) : (
+                  draftAttachment.error
+                )}
+              </span>
+              {draftAttachment.truncated ? (
+                <span className="attachment-warning">
+                  Extracted content was shortened to the 50,000-character editor limit.
+                </span>
+              ) : null}
+            </div>
+            <button
+              className="button button-quiet attachment-remove"
+              type="button"
+              onClick={removeDraftAttachment}
+              disabled={busy}
+            >
+              Remove
+            </button>
+          </div>
+        ) : null}
+
+        {draftAttachment?.status === "awaiting-choice" && pendingExtractedText ? (
+          <div className="attachment-choice" role="group" aria-label="Add extracted file content">
+            <div>
+              <strong>Keep the current draft?</strong>
+              <p>Append the extracted content, or replace the editor with it.</p>
+            </div>
+            <div className="attachment-choice-actions">
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => applyExtractedContent("append")}
+              >
+                Append to draft
+              </button>
+              <button
+                className="button button-quiet"
+                type="button"
+                onClick={() => applyExtractedContent("replace")}
+              >
+                Replace draft
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="source-options-grid">
           <div>
@@ -615,16 +944,33 @@ export function PressReleaseWorkspace({
         </p>
 
         <div className="form-actions">
-          <button className="button button-primary review-button" type="submit" disabled={busy}>
-            {processing === "reviewing" ? (
-              <>
-                <span className="spinner" aria-hidden="true" />
-                Reviewing Draft
-              </>
-            ) : (
-              "Review Draft"
-            )}
-          </button>
+          <div className="source-action-buttons">
+            <button className="button button-primary review-button" type="submit" disabled={busy}>
+              {processing === "reviewing" ? (
+                <>
+                  <span className="spinner" aria-hidden="true" />
+                  Reviewing Draft
+                </>
+              ) : (
+                "Review Draft"
+              )}
+            </button>
+            <button
+              className="button button-secondary rewrite-button"
+              type="button"
+              disabled={busy}
+              onClick={() => void handleDirectRewrite()}
+            >
+              {processing === "rewriting" && !reviewedSource ? (
+                <>
+                  <span className="spinner spinner-dark" aria-hidden="true" />
+                  Rewriting Draft
+                </>
+              ) : (
+                "Rewrite Draft"
+              )}
+            </button>
+          </div>
           <p>
             Pass threshold: {initialPassScore}/100 <span aria-hidden="true">·</span>{" "}
             {selectedModelDetails.label} <span aria-hidden="true">·</span> High reasoning
@@ -685,7 +1031,7 @@ export function PressReleaseWorkspace({
         </div>
       ) : null}
 
-      {review ? (
+      {review || rewriteState.status === "quotation-failed" || rewriteState.status === "success" ? (
         <div
           className="results-stack"
           ref={resultRef}
@@ -693,15 +1039,17 @@ export function PressReleaseWorkspace({
           role="region"
           aria-label="Review result"
         >
-          <ReviewSummary
-            review={review}
-            passScore={passScore}
-            message={message}
-            busy={busy}
-            reviewIsStale={reviewIsStale}
-            onRewrite={handleInitialRewrite}
-            onEditDraft={focusInput}
-          />
+          {review ? (
+            <ReviewSummary
+              review={review}
+              passScore={passScore}
+              message={message}
+              busy={busy}
+              reviewIsStale={reviewIsStale}
+              onRewrite={handleInitialRewrite}
+              onEditDraft={focusInput}
+            />
+          ) : null}
           {rewriteState.status === "quotation-failed" ? (
             <QuotationFailurePanel
               issues={rewriteState.issues}

@@ -6,9 +6,9 @@ import {
   safeReturnPath,
   validateSameOrigin,
 } from "@/lib/server/auth/http";
-import { loginWithPassword } from "@/lib/server/auth/login-service";
+import { loginWithPasswordProof } from "@/lib/server/auth/login-service";
 import { setSessionCookies } from "@/lib/server/auth/sessions";
-import { loginInputSchema } from "@/lib/shared/auth-contracts";
+import { loginProofInputSchema } from "@/lib/shared/auth-contracts";
 import { readJsonRequest } from "@/lib/server/http";
 
 export const runtime = "nodejs";
@@ -17,11 +17,11 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     validateSameOrigin(request);
-    const input = loginInputSchema.parse(await readJsonRequest(request));
-    const result = await loginWithPassword(
+    const input = loginProofInputSchema.parse(await readJsonRequest(request));
+    const result = await loginWithPasswordProof(
       getDatabase(),
       input.email,
-      input.password,
+      input.passwordProof,
       request,
     );
     const response = NextResponse.json(
@@ -40,6 +40,6 @@ export async function POST(request: Request) {
     setSessionCookies(response, result.session, request);
     return response;
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, { operation: "auth.login", request });
   }
 }

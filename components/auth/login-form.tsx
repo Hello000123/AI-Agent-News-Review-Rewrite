@@ -2,8 +2,12 @@
 
 import { useState } from "react";
 
+import { PasswordInput } from "@/components/auth/password-input";
 import { AuthRequestError, login } from "@/lib/client/auth-api";
-import { loginInputSchema } from "@/lib/shared/auth-contracts";
+import {
+  loginInputSchema,
+  PASSWORD_MAX_LENGTH,
+} from "@/lib/shared/auth-contracts";
 
 export function LoginForm({
   returnTo,
@@ -23,7 +27,9 @@ export function LoginForm({
     setErrorMessage("");
     const parsed = loginInputSchema.safeParse({ email, password, returnTo });
     if (!parsed.success) {
-      setErrorMessage("Enter a valid email address and password.");
+      setErrorMessage(
+        parsed.error.issues[0]?.message || "Enter a valid email address and password.",
+      );
       return;
     }
 
@@ -63,14 +69,13 @@ export function LoginForm({
       </div>
       <div className="auth-field">
         <label htmlFor="login-password">Password</label>
-        <input
+        <PasswordInput
           id="login-password"
-          type="password"
           autoComplete="current-password"
           value={password}
           disabled={submitting}
           required
-          maxLength={128}
+          maxLength={PASSWORD_MAX_LENGTH + 1}
           onChange={(event) => setPassword(event.target.value)}
         />
       </div>

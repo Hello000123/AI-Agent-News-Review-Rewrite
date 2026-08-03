@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildXlsxReport } from "./build-xlsx-report.mjs";
 import {
   analyzeResults,
+  authenticateBenchmarkSession,
   buildTasks,
   datasetSha256,
   formatProgress,
@@ -115,7 +116,7 @@ export async function promptForTestModel(
   }
 }
 
-function readNonSecretProjectEnv(text) {
+function readProjectEnv(text) {
   const allowed = new Set([
     "AI_MODEL",
     "XAI_MODEL",
@@ -124,6 +125,10 @@ function readNonSecretProjectEnv(text) {
     "REVIEW_PASS_SCORE",
     "XAI_STREAM",
     "DEEPSEEK_STREAM",
+    "PUBLIC_APP_URL",
+    "REVIEW_EVAL_EMAIL",
+    "REVIEW_EVAL_PASSWORD",
+    "REVIEW_EVAL_ORIGIN",
   ]);
   const values = {};
   for (const rawLine of text.split(/\r?\n/u)) {
@@ -142,13 +147,16 @@ function readNonSecretProjectEnv(text) {
 }
 
 async function projectEnvironment() {
-  try {
-    const text = await fs.readFile(path.join(projectRoot, ".env.local"), "utf8");
-    return readNonSecretProjectEnv(text);
-  } catch (error) {
-    if (error?.code === "ENOENT") return {};
-    throw error;
+  const values = {};
+  for (const filename of [".env.local", ".env.benchmark.local"]) {
+    try {
+      const text = await fs.readFile(path.join(projectRoot, filename), "utf8");
+      Object.assign(values, readProjectEnv(text));
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
+  return values;
 }
 
 function beforeMarker(text, marker) {
@@ -232,6 +240,11 @@ function helpText() {
 Usage:
   node tests/chinese-review-calibration/run-chinese-review-test.mjs [options]
 
+Live runs sign in through /api/auth/login. Set REVIEW_EVAL_EMAIL and
+REVIEW_EVAL_PASSWORD in the process environment or ignored .env.benchmark.local.
+REVIEW_EVAL_ORIGIN may override the same-origin value when it differs from
+PUBLIC_APP_URL or --base-url.
+
 Options:
   --base-url URL          Running application URL (default http://127.0.0.1:3000)
   --concurrency N         Maximum active review requests, 1-5 (default 5)
@@ -276,6 +289,19 @@ async function parseOptions(argumentsList) {
     repeats: 1,
     modelName: process.env.EVAL_MODEL?.trim() || "",
     modelWasExplicit: Boolean(process.env.EVAL_MODEL?.trim()),
+    authEmail:
+      process.env.REVIEW_EVAL_EMAIL?.trim() ||
+      localEnv.REVIEW_EVAL_EMAIL?.trim() ||
+      "",
+    authPassword:
+      process.env.REVIEW_EVAL_PASSWORD ||
+      localEnv.REVIEW_EVAL_PASSWORD ||
+      "",
+    authOrigin:
+      process.env.REVIEW_EVAL_ORIGIN?.trim() ||
+      localEnv.REVIEW_EVAL_ORIGIN?.trim() ||
+      localEnv.PUBLIC_APP_URL?.trim() ||
+      "",
     defaultModel:
       supportedModel(process.env.AI_MODEL) ||
       supportedModel(localEnv.AI_MODEL) ||
@@ -372,6 +398,7 @@ async function parseOptions(argumentsList) {
     );
   }
   options.baseUrl = normalizeBaseUrl(options.baseUrl);
+  options.authOrigin = options.authOrigin || new URL(options.baseUrl).origin;
   options.datasetPath = path.resolve(options.datasetPath);
   options.outputDirectory = path.resolve(options.outputDirectory);
   options.localEnv = localEnv;
@@ -484,6 +511,15 @@ export async function main(argumentsList = process.argv.slice(2)) {
   const loadedResults = await loadResults(resultsPath);
   const reconciliation = reconcileResults(dataset, loadedResults, options.reviewerSha256);
   let results = reconciliation.currentResults;
+  const authentication = noRequestMode
+    ? null
+    : await authenticateBenchmarkSession({
+        baseUrl: options.baseUrl,
+        email: options.authEmail,
+        password: options.authPassword,
+        timeoutMs: options.timeoutMs,
+        origin: options.authOrigin,
+      });
 
   process.stdout.write(
     `Dataset valid: ${dataset.length} drafts; selected tests: ${tasks.length}; model label: ${options.modelName}; dataset ${currentDatasetSha256.slice(0, 12)}; reviewer ${options.reviewerSha256.slice(0, 12)}.\n`,
@@ -498,6 +534,11 @@ export async function main(argumentsList = process.argv.slice(2)) {
   }
   if (warnings.length > 0) {
     process.stdout.write(`Dataset similarity warnings: ${warnings.length}. Review with --dry-run output if drafts change.\n`);
+  }
+  if (authentication) {
+    process.stdout.write(
+      `Authentication successful: ${authentication.userRole} benchmark session established.\n`,
+    );
   }
 
   await appendRunRecord(
@@ -526,6 +567,7 @@ export async function main(argumentsList = process.argv.slice(2)) {
         modelId: options.modelName,
         reviewerSha256: options.reviewerSha256,
         rawLogPath,
+        authentication,
       },
       concurrency: options.concurrency,
       force: options.force,

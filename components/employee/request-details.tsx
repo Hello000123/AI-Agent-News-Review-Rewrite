@@ -17,7 +17,14 @@ function formattedDate(timestamp: number | null) {
   return new Intl.DateTimeFormat("en-HK", {
     dateStyle: "medium",
     timeStyle: "short",
+    timeZone: "Asia/Hong_Kong",
   }).format(new Date(timestamp * 1_000));
+}
+
+function formattedFileSize(bytes: number) {
+  return `${(bytes / 1024 / 1024).toLocaleString("en-US", {
+    maximumFractionDigits: 2,
+  })} MB`;
 }
 
 function DeliveryNotice({ delivery }: { delivery: EmailDeliveryView }) {
@@ -113,9 +120,9 @@ export function EmployeeRequestDetails({
     ["Full name", request.fullName],
     ["Email address", request.email],
     ["Phone number", request.phone],
-    ["Company or organisation", request.company],
-    ["Department", request.department],
-    ["Job title", request.jobTitle],
+    ["Company or organisation", request.company || "Not provided"],
+    ["Department", request.department || "Not provided"],
+    ["Job title", request.jobTitle || "Not provided"],
     ["Submitted", formattedDate(request.createdAt)],
     ["Last updated", formattedDate(request.updatedAt)],
   ];
@@ -138,6 +145,43 @@ export function EmployeeRequestDetails({
             </div>
           ))}
         </dl>
+        <div className="employee-admin-message">
+          <h2>Message to administrator</h2>
+          <p>{request.adminMessage || "No message provided"}</p>
+        </div>
+        <div className="employee-attachment">
+          <h2>Supporting document</h2>
+          {request.attachment ? (
+            <div className="attachment-row">
+              <div className="attachment-icon" aria-hidden="true">DOC</div>
+              <div className="attachment-details">
+                <strong>{request.attachment.fileName}</strong>
+                <span>
+                  {request.attachment.mimeType} ·{" "}
+                  {formattedFileSize(request.attachment.size)}
+                </span>
+              </div>
+              <div className="employee-attachment-actions">
+                <a
+                  className="button button-secondary"
+                  href={`/api/employee/account-requests/${encodeURIComponent(request.id)}/attachment?mode=view`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  View
+                </a>
+                <a
+                  className="button button-quiet"
+                  href={`/api/employee/account-requests/${encodeURIComponent(request.id)}/attachment`}
+                >
+                  Download
+                </a>
+              </div>
+            </div>
+          ) : (
+            <p>No supporting document provided</p>
+          )}
+        </div>
       </section>
 
       <aside className="card employee-decision-card" aria-labelledby="decision-heading">

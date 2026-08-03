@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     clearSessionCookies(response, request);
     return response;
   } catch (error) {
-    const response = authErrorResponse(error);
+    const response = authErrorResponse(error, { operation: "auth.logout", request });
     if (response.status === 401) clearSessionCookies(response, request);
     return response;
   }

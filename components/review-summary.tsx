@@ -60,20 +60,20 @@ export function ReviewSummary({
 }: ReviewSummaryProps) {
   const passed = review.decision === "PASS";
   const scores: ScoreItem[] = [
-    { label: "Facts & support (25%)", score: review.factualCompletenessScore },
+    { label: "Content completeness & consistency (25%)", score: review.factualCompletenessScore },
     { label: "Structure & organisation (20%)", score: review.structureScore },
     { label: "Clarity & readability (15%)", score: review.clarityScore },
     { label: "Grammar & language (15%)", score: review.languageQualityScore },
     { label: "News professionalism (15%)", score: review.professionalismScore },
-    { label: "Attribution & quotations (10%)", score: review.attributionScore },
+    { label: "Attribution & quotation clarity (10%)", score: review.attributionScore },
   ];
   const scoreReasons = [
-    "Facts & support: " + review.scoreReasons.factualCompleteness,
+    "Content completeness & consistency: " + review.scoreReasons.factualCompleteness,
     "Structure & organisation: " + review.scoreReasons.structure,
     "Clarity & readability: " + review.scoreReasons.clarity,
     "Grammar & language: " + review.scoreReasons.languageQuality,
     "News professionalism: " + review.scoreReasons.professionalism,
-    "Attribution & quotations: " + review.scoreReasons.attribution,
+    "Attribution & quotation clarity: " + review.scoreReasons.attribution,
   ];
   const findings = review.findings.map(
     ({ category, severity, issue, evidence, recommendation }) =>

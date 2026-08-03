@@ -1,11 +1,14 @@
 import type { D1Database, D1Result } from "@cloudflare/workers-types";
 
-import { getPasswordSetupTtlSeconds } from "@/lib/server/auth/config";
+import {
+  getPasswordPepper,
+  getPasswordSetupTtlSeconds,
+} from "@/lib/server/auth/config";
 import {
   createId,
-  hashPassword,
   nowInSeconds,
   randomToken,
+  sealPasswordProof,
   sha256,
 } from "@/lib/server/auth/crypto";
 import {
@@ -13,24 +16,49 @@ import {
   deliverEmail,
   newAccountRequestEmail,
   rejectedAccountEmail,
+  removedClientAccountEmail,
   type EmailDeliveryResult,
 } from "@/lib/server/auth/email";
 import {
   createPendingAccountRequest,
   getAccountRequestById,
+  getActiveClientAccount,
   getSetupTokenByHash,
   recordEmailDelivery,
+  updateClientRemovalEmailStatus,
 } from "@/lib/server/auth/repository";
+import { validateUploadedFile } from "@/lib/server/uploads/file-processing";
+import { getAccountDocumentBucket } from "@/lib/server/uploads/storage";
 import { buildSessionMaterial, type SessionMaterial } from "@/lib/server/auth/sessions";
 import { AppError } from "@/lib/server/errors";
+import {
+  PASSWORD_PROOF_BYTES,
+  PASSWORD_SALT_BYTES,
+  SCRYPT_BLOCK_SIZE,
+  SCRYPT_COST,
+  SCRYPT_PARALLELIZATION,
+} from "@/lib/shared/auth-contracts";
 import type {
   AccountRequestInput,
   AccountRequestView,
   AuthenticatedUser,
+  ClientRemovalAuditView,
+  PasswordDerivation,
 } from "@/lib/shared/auth-contracts";
 
 function changed(result: D1Result) {
   return Number(result.meta.changes ?? 0);
+}
+
+function scryptPasswordDerivation(salt: string): PasswordDerivation {
+  return {
+    algorithm: "scrypt",
+    salt,
+    cost: SCRYPT_COST,
+    blockSize: SCRYPT_BLOCK_SIZE,
+    parallelization: SCRYPT_PARALLELIZATION,
+    keyLength: PASSWORD_PROOF_BYTES,
+  };
 }
 
 async function recordDelivery(
@@ -54,8 +82,54 @@ export async function submitAccountRequest(
   database: D1Database,
   input: AccountRequestInput,
   publicAppUrl: string,
+  attachmentFile?: File,
 ) {
-  const request = await createPendingAccountRequest(database, input);
+  let attachment:
+    | {
+        id: string;
+        storageKey: string;
+        fileName: string;
+        mimeType: string;
+        size: number;
+        createdAt: number;
+      }
+    | undefined;
+  let bucket: ReturnType<typeof getAccountDocumentBucket> | undefined;
+
+  if (attachmentFile) {
+    const validated = await validateUploadedFile(attachmentFile);
+    bucket = getAccountDocumentBucket();
+    attachment = {
+      id: createId(),
+      storageKey: `account-requests/${createId()}`,
+      fileName: validated.safeName,
+      mimeType: validated.mimeType,
+      size: validated.size,
+      createdAt: nowInSeconds(),
+    };
+    try {
+      await bucket.put(attachment.storageKey, validated.bytes, {
+        httpMetadata: { contentType: attachment.mimeType },
+      });
+    } catch (error) {
+      throw new AppError(
+        "DOCUMENT_STORAGE_UNAVAILABLE",
+        "The supporting document could not be stored securely. Try again later.",
+        503,
+        { cause: error },
+      );
+    }
+  }
+
+  let request: AccountRequestView;
+  try {
+    request = await createPendingAccountRequest(database, input, attachment);
+  } catch (error) {
+    if (attachment && bucket) {
+      await bucket.delete(attachment.storageKey).catch(() => undefined);
+    }
+    throw error;
+  }
   let delivery: EmailDeliveryResult;
   try {
     delivery = await deliverEmail(newAccountRequestEmail(request, publicAppUrl));
@@ -344,6 +418,117 @@ export async function resendPasswordSetupEmail(
   return { request, delivery };
 }
 
+export async function removeClientAccount(
+  database: D1Database,
+  clientId: string,
+  employee: AuthenticatedUser,
+  removalMessage: string,
+) {
+  assertEmployee(employee);
+  const client = await getActiveClientAccount(database, clientId);
+  if (!client) {
+    throw new AppError(
+      "CLIENT_ACCOUNT_NOT_FOUND",
+      "The client account could not be found or has already been removed.",
+      404,
+    );
+  }
+
+  const auditId = createId();
+  const now = nowInSeconds();
+  const results = await database.batch([
+    database
+      .prepare(
+        `INSERT INTO client_removal_audit_records (
+          id, removed_client_user_id, client_email, actor_user_id,
+          removal_message, created_at, email_status
+         )
+         SELECT ?, id, email, ?, ?, ?, 'pending'
+         FROM users
+         WHERE id = ? AND role = 'client' AND status <> 'disabled'`,
+      )
+      .bind(auditId, employee.id, removalMessage, now, clientId),
+    database
+      .prepare(
+        `UPDATE users
+         SET status = 'disabled',
+             password_hash = NULL,
+             password_set_at = NULL,
+             updated_at = ?
+         WHERE id = ?
+           AND role = 'client'
+           AND status <> 'disabled'
+           AND EXISTS (
+             SELECT 1
+             FROM client_removal_audit_records
+             WHERE id = ? AND removed_client_user_id = users.id
+           )`,
+      )
+      .bind(now, clientId, auditId),
+    database
+      .prepare(
+        `UPDATE sessions
+         SET revoked_at = ?
+         WHERE user_id = ?
+           AND revoked_at IS NULL
+           AND EXISTS (
+             SELECT 1
+             FROM client_removal_audit_records
+             WHERE id = ? AND removed_client_user_id = sessions.user_id
+           )`,
+      )
+      .bind(now, clientId, auditId),
+    database
+      .prepare(
+        `UPDATE password_setup_tokens
+         SET invalidated_at = ?
+         WHERE user_id = ?
+           AND used_at IS NULL
+           AND invalidated_at IS NULL
+           AND EXISTS (
+             SELECT 1
+             FROM client_removal_audit_records
+             WHERE id = ? AND removed_client_user_id = password_setup_tokens.user_id
+           )`,
+      )
+      .bind(now, clientId, auditId),
+  ]);
+
+  if (changed(results[0]) !== 1 || changed(results[1]) !== 1) {
+    throw new AppError(
+      "CLIENT_ACCOUNT_ALREADY_REMOVED",
+      "The client account has already been removed.",
+      409,
+    );
+  }
+
+  let delivery: EmailDeliveryResult;
+  try {
+    delivery = await deliverEmail(
+      removedClientAccountEmail(client, removalMessage),
+    );
+  } catch {
+    delivery = { status: "failed", errorCode: "TEMPLATE_CONFIGURATION" };
+  }
+  try {
+    await updateClientRemovalEmailStatus(database, auditId, delivery);
+  } catch (error) {
+    console.error("[auth-client-removal] Delivery status update failed.", {
+      errorType: error instanceof Error ? error.name : typeof error,
+    });
+  }
+
+  const audit: ClientRemovalAuditView = {
+    id: auditId,
+    removedClientAccountId: client.id,
+    clientEmail: client.email,
+    administratorAccountId: employee.id,
+    removalMessage,
+    createdAt: now,
+  };
+  return { client, audit, delivery };
+}
+
 export async function inspectPasswordSetupToken(database: D1Database, rawToken: string) {
   if (rawToken.length < 32 || rawToken.length > 256) return null;
   const token = await getSetupTokenByHash(database, await sha256(rawToken));
@@ -361,13 +546,15 @@ export async function inspectPasswordSetupToken(database: D1Database, rawToken: 
     email: token.email,
     fullName: token.full_name,
     expiresAt: token.expires_at,
+    derivation: scryptPasswordDerivation(randomToken(PASSWORD_SALT_BYTES)),
   };
 }
 
 export async function completePasswordSetup(
   database: D1Database,
   rawToken: string,
-  newPassword: string,
+  passwordSalt: string,
+  passwordProof: string,
   request: Request,
 ) {
   const tokenHash = await sha256(rawToken);
@@ -387,7 +574,12 @@ export async function completePasswordSetup(
     );
   }
 
-  const passwordHash = await hashPassword(newPassword);
+  const passwordHash = await sealPasswordProof(
+    token.user_id,
+    scryptPasswordDerivation(passwordSalt),
+    passwordProof,
+    getPasswordPepper(),
+  );
   const session = await buildSessionMaterial(token.user_id, request);
 
   try {
@@ -482,7 +674,7 @@ export async function completePasswordSetup(
       id: token.user_id,
       email: token.email,
       fullName: token.full_name,
-      role: "client" as const,
+      role: token.user_role,
     },
   };
 }

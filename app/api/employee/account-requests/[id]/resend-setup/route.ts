@@ -32,6 +32,9 @@ export async function POST(request: Request, context: RouteContext) {
       },
     });
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, {
+      operation: "employee.account-request.resend-setup",
+      request,
+    });
   }
 }

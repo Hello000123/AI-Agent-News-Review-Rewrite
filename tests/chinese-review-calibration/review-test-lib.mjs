@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  pbkdf2 as nodePbkdf2,
+  scrypt as nodeScrypt,
+} from "node:crypto";
 
 export const CATEGORY_CONFIG = Object.freeze([
   { name: "Excellent", idToken: "EXCELLENT", minimum: 85, maximum: 100 },
@@ -694,6 +698,183 @@ function apiFailure(response, body) {
   };
 }
 
+function responseCookiePairs(headers) {
+  const setCookieValues =
+    typeof headers.getSetCookie === "function"
+      ? headers.getSetCookie()
+      : [headers.get("set-cookie") ?? ""];
+  return setCookieValues
+    .flatMap((value) => value.split(/,(?=\s*pressready_)/gu))
+    .map((value) => value.trim().split(";")[0])
+    .filter(Boolean);
+}
+
+function deriveBenchmarkPasswordProof(password, derivation) {
+  if (
+    !derivation ||
+    typeof derivation.salt !== "string" ||
+    derivation.keyLength !== 32
+  ) {
+    throw new Error("Benchmark login returned an invalid password challenge.");
+  }
+  const salt = Buffer.from(derivation.salt, "base64url");
+  if (salt.length < 16) {
+    throw new Error("Benchmark login returned an invalid password challenge.");
+  }
+  return new Promise((resolve, reject) => {
+    const callback = (error, value) => {
+      if (error) reject(error);
+      else resolve(value.toString("base64url"));
+    };
+    if (
+      derivation.algorithm === "scrypt" &&
+      derivation.cost === 32768 &&
+      derivation.blockSize === 8 &&
+      derivation.parallelization === 3
+    ) {
+      nodeScrypt(
+        password,
+        salt,
+        derivation.keyLength,
+        {
+          N: derivation.cost,
+          r: derivation.blockSize,
+          p: derivation.parallelization,
+          maxmem: 64 * 1024 * 1024,
+        },
+        callback,
+      );
+      return;
+    }
+    if (
+      derivation.algorithm === "pbkdf2-sha256" &&
+      Number.isInteger(derivation.iterations) &&
+      derivation.iterations >= 100000 &&
+      derivation.iterations <= 2000000
+    ) {
+      nodePbkdf2(
+        password,
+        salt,
+        derivation.iterations,
+        derivation.keyLength,
+        "sha256",
+        callback,
+      );
+      return;
+    }
+    reject(new Error("Benchmark login returned an invalid password challenge."));
+  });
+}
+
+export async function authenticateBenchmarkSession({
+  baseUrl,
+  email,
+  password,
+  timeoutMs,
+  origin = new URL(baseUrl).origin,
+  fetchImpl = fetch,
+}) {
+  if (!email?.trim() || !password) {
+    throw new Error(
+      "Live benchmark authentication requires REVIEW_EVAL_EMAIL and REVIEW_EVAL_PASSWORD.",
+    );
+  }
+
+  const requestOrigin = new URL(origin).origin;
+  let response;
+  let responseBody;
+  try {
+    const challengeResponse = await fetchImpl(
+      `${baseUrl}/api/auth/login/challenge`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: requestOrigin,
+        },
+        body: JSON.stringify({ email: email.trim() }),
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    );
+    const challengeText = await challengeResponse.text();
+    let challengeBody;
+    try {
+      challengeBody = JSON.parse(challengeText);
+    } catch {
+      throw new Error("Benchmark login returned invalid JSON.");
+    }
+    if (!challengeResponse.ok) {
+      const failure = apiFailure(challengeResponse, challengeBody);
+      throw new Error(
+        `Benchmark login failed (${failure.errorCode}): ${failure.message}`,
+      );
+    }
+    const passwordProof = await deriveBenchmarkPasswordProof(
+      password,
+      challengeBody?.derivation,
+    );
+    response = await fetchImpl(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: requestOrigin,
+      },
+      body: JSON.stringify({
+        email: email.trim(),
+        password,
+        passwordProof,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const responseText = await response.text();
+    try {
+      responseBody = JSON.parse(responseText);
+    } catch {
+      throw new Error("Benchmark login returned invalid JSON.");
+    }
+  } catch (error) {
+    if (
+      error?.message === "Benchmark login returned invalid JSON." ||
+      error?.message ===
+        "Benchmark login returned an invalid password challenge." ||
+      error?.message?.startsWith("Benchmark login failed (")
+    ) {
+      throw error;
+    }
+    const failure = safeFetchFailure(error);
+    throw new Error(`Benchmark login failed: ${failure.message}`);
+  }
+
+  if (!response.ok) {
+    const failure = apiFailure(response, responseBody);
+    throw new Error(
+      `Benchmark login failed (${failure.errorCode}): ${failure.message}`,
+    );
+  }
+
+  const cookiePairs = responseCookiePairs(response.headers);
+  const sessionCookie = cookiePairs.find((value) =>
+    value.startsWith("pressready_session="),
+  );
+  const csrfCookie = cookiePairs.find((value) =>
+    value.startsWith("pressready_csrf="),
+  );
+  const csrfToken = csrfCookie?.slice("pressready_csrf=".length) ?? "";
+  if (!sessionCookie || !csrfToken) {
+    throw new Error("Benchmark login did not return the required session and CSRF cookies.");
+  }
+
+  return {
+    cookieHeader: cookiePairs.join("; "),
+    csrfToken,
+    origin: requestOrigin,
+    userRole:
+      typeof responseBody?.user?.role === "string"
+        ? responseBody.user.role
+        : "authenticated",
+  };
+}
+
 function parsingFailure(response) {
   return {
     errorType: "Parsing",
@@ -738,7 +919,16 @@ export async function reviewTask(task, options) {
     try {
       response = await fetchImpl(`${baseUrl}/api/review`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Origin: options.authentication?.origin || new URL(baseUrl).origin,
+          ...(options.authentication
+            ? {
+                Cookie: options.authentication.cookieHeader,
+                "X-CSRF-Token": options.authentication.csrfToken,
+              }
+            : {}),
+        },
         body: JSON.stringify({
           draft: task.draft_text,
           sourceUrl: "",

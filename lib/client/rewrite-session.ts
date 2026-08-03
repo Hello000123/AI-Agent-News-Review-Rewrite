@@ -24,7 +24,7 @@ export const persistedRewriteSessionSchema = z
     model: selectableModelSchema.default(DEFAULT_SELECTABLE_MODEL),
     reviewedInputSignature: z.string().min(1).max(MAX_REFERENCE_CHARS * 2 + 5_000),
     reviewedSource: sourceSnapshotSchema,
-    review: reviewResultSchema,
+    review: reviewResultSchema.nullable(),
     message: z.string().max(2_000),
     passScore: z.number().min(0).max(100),
     history: z.array(completedRewriteTurnSchema).max(MAX_REWRITE_HISTORY_ENTRIES),

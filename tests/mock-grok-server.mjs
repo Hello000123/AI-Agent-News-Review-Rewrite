@@ -79,7 +79,7 @@ const highReview = {
     "The draft uses a professional structure and tone.",
   ],
   missingInformation: [],
-  recommendations: ["[Optional - no score effect] Perform a final fact check before publication."],
+  recommendations: ["[Optional - no score effect] Perform a final proofreading pass before publication."],
 };
 
 let reviewCalls = 0;

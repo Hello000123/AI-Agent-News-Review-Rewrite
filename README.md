@@ -6,7 +6,7 @@ PressReady is a focused local website for one workflow:
 
 The Review Agent scores the submitted copy once and returns a structured assessment. Rewriting never starts automatically and is never skipped because a review score is high: after either a high or low score, the user can explicitly request a Rewrite Agent call or return to the source input. The rewrite uses the immutable source snapshot that produced the displayed review. A model button lets the user choose DeepSeek V4 Pro or Grok 4.5 for the article; both run with high reasoning. After the first rewrite, `Rewrite with AI Again` opens optional concise/more-detailed controls and an improvement-instructions field before another request is made.
 
-The project is intentionally limited to this workflow. It has no login, database, account-level history, news search, dark theme, publishing, distribution, or scheduled work. The active article and its successful rewrite turns are retained in tab-scoped `sessionStorage` so a same-tab reload can continue the current editing session; starting a new draft or changing the source clears that history. Rewrites automatically preserve the primary input language and Chinese script: English input stays English, while Traditional or Simplified Chinese input stays in the detected Chinese script.
+The project is intentionally focused on this workflow. The workspace is protected by approved client or employee accounts backed by Cloudflare D1; it does not provide account-level article history, news search, publishing, distribution, or scheduled work. The active article and its successful rewrite turns are retained in tab-scoped `sessionStorage` so a same-tab reload can continue the current editing session; starting a new draft or changing the source clears that history. Rewrites automatically preserve the primary input language and Chinese script: English input stays English, while Traditional or Simplified Chinese input stays in the detected Chinese script.
 
 ## Technology stack
 
@@ -15,10 +15,12 @@ The project is intentionally limited to this workflow. It has no login, database
 - Next.js route handlers for server-only API access
 - Zod for request and AI-response validation
 - Native server-side fetch for the DeepSeek and xAI APIs
+- Cloudflare D1 for accounts, sessions, approval audits, and removal audits
+- Private Cloudflare R2 storage for optional account supporting documents
 - Plain responsive CSS
 - Vitest for unit and route-level tests
 
-No provider SDK, UI framework, database, or separate Express server is required.
+No provider SDK, UI framework, or separate Express server is required.
 
 ## Folder structure
 
@@ -144,7 +146,7 @@ The production server also starts at [http://localhost:3000](http://localhost:30
 REVIEW_PASS_SCORE defaults to 80.
 
 - `/api/review` builds one immutable source snapshot and invokes only the Review Agent. It never starts a rewrite.
-- If text and a URL are both supplied, the submitted text is the copy being scored and the retrieved article is supporting reference material. For a URL-only request, the extracted article becomes the primary copy.
+- If text and a URL are both supplied, only the submitted text is sent to the Review Agent; retrieved material remains available to the later Rewrite Agent but cannot influence review scores. For a URL-only request, the extracted article becomes the primary copy and is reviewed as writing.
 - Every valid result shows the final score, uncapped weighted score, any deterministic cap and reasons, readiness band, six category rationales, structured findings, strengths, missing information, and recommendations.
 - Both a passing/high score and a failing/low score expose `Rewrite with AI`. Clicking it makes a separate `/api/rewrite` request unless another request is already running or the reviewed source has since changed. A score never causes an automatic rewrite and never suppresses an explicit rewrite.
 - Editing the text or URL clears any displayed rewrite immediately and marks the existing review as stale; a new review is required before rewriting that changed source.
@@ -152,19 +154,19 @@ REVIEW_PASS_SCORE defaults to 80.
 
 The Review Agent returns category scores and findings, but the backend computes the authoritative weighted and final scores, readiness band, and decision. The weighting is:
 
-- factual completeness and support: 25%;
+- content completeness and internal consistency (`factualCompletenessScore`, retained as a legacy API key): 25%;
 - structure and logical flow: 20%;
 - clarity and readability: 15%;
 - grammar and language quality: 15%;
 - news-writing professionalism: 15%;
-- attribution and quotation handling: 10%.
+- attribution and quotation clarity: 10%.
 
-Before weighting, the backend lowers any category score that contradicts the severity of a finding or its readiness-risk flag; it never raises a model score. The consistency-normalized weighted score is rounded to the nearest whole number. Deterministic safeguards then apply the lowest relevant cap:
+Before weighting, the backend lowers any category score that contradicts the severity of a writing finding or an active writing-readiness flag; it never raises a model score. The three legacy fact-related risk fields remain in the JSON schema but are normalized to `false` and cannot affect scores. The consistency-normalized weighted score is rounded to the nearest whole number. Deterministic writing safeguards then apply the lowest relevant cap:
 
-- 39 for a critical finding or a draft marked severely incomplete or unreliable;
-- 59 for a major finding, serious factual gap, unsupported material claim, major structural problem, very poor language, or serious attribution/quotation problem;
-- 74 for a moderate finding, necessary missing information, or a category below 60;
-- 89 for a minor material finding, a category below 75, or a non-optional recommendation with no matching structured finding.
+- 39 for a critical writing finding;
+- 59 for a major writing finding, major structural problem, very poor language, serious attribution/quotation clarity problem, or any category below 40;
+- 74 for a moderate writing finding or a category below 60;
+- 89 for a minor material writing finding or a category below 75.
 
 The final score is the lower of the weighted score and applicable cap. Readiness bands are 90–100 publication-ready, 75–89 strong with limited editing, 60–74 requiring substantial rewriting, 40–59 weak, and 0–39 severely deficient. The backend compares the final score—not the model's claimed arithmetic or decision—with REVIEW_PASS_SCORE.
 
@@ -173,11 +175,14 @@ The final score is the lower of the weighted score and applicable cap. Readiness
 The Review Agent:
 
 - evaluates without rewriting;
-- scores the exact submitted copy across the six fixed categories and published readiness bands;
-- treats retrieved article and page context as separately labelled evidence rather than transferring a publisher's reputation or reference prose quality to a user draft;
-- applies equivalent standards across languages and ignores publisher reputation;
-- accepts meaningful relative time expressions such as `yesterday`, `recently`, `昨天`, and `近期` as valid time information; it does not require an exact calendar date or penalize timeless copy when chronology is immaterial;
-- deducts for time only when material context is absent, unclear, internally contradictory, or too vague to understand, and never invents an exact date from relative wording;
+- scores only the exact submitted copy's clarity, readability, grammar, language, structure, organisation, coherence, logical flow, tone, style, concision, relevance, internal writing completeness, and suitability for the identified article type;
+- does not receive separately retrieved reference text when a user draft is present and never checks claims against external information;
+- accepts false, fictional, outdated, satirical, extraordinary, or unverifiable claims as the draft's internal reality and never deducts or caps a score for those qualities;
+- never treats missing citations, evidence, links, named sources, or external support as review failures;
+- may identify direct contradictions within the draft, unclear statements, missing explanations, or inconsistent details as internal writing problems without declaring which statement is factually correct;
+- applies equivalent writing standards across languages and ignores publisher reputation and newsworthiness;
+- accepts meaningful relative time expressions such as `yesterday`, `recently`, `昨天`, and `近期`; it flags chronology only when the submitted draft is internally unclear or contradictory;
+- deducts for chronology only when the submitted wording is internally unclear or contradictory enough to disrupt comprehension;
 - treats media contacts, boilerplates, executive quotations, formal datelines, and calls to action as optional unless essential to the specific announcement;
 - returns a required rationale for every category score, explicit readiness-risk flags, structured category/severity findings, strengths, missing information, and recommendations;
 - uses temperature 0 for the most repeatable scoring the configured provider can offer;
@@ -262,7 +267,7 @@ The unit and component suites cover:
 - request content type, request JSON, and request-size limits;
 - news-editor prompt structure, factual fidelity, language/script preservation, press-release-artifact removal, and untrusted-data boundaries;
 - quotation classification, Unicode normalization, repeated/nested forms, modification, omission, splitting, merging, punctuation changes, one focused retry, and actionable retained-candidate errors;
-- a deterministic bilingual review set with strong and poor Traditional Chinese and English copy, missing facts, unsupported claims, Chinese quotation styles, and the supplied Oriental Daily URL;
+- deterministic review regression coverage proving legacy factual-risk flags cannot lower scores or trigger caps, plus strong and poor Traditional Chinese and English writing samples and internal-contradiction cases;
 - a 12-case bilingual rewrite set spanning language/script preservation, mixed-language names, rough notes, promotional releases, quotations, dates, statistics, allegations, uncertainty, missing information, placeholders, contradictions, and prompt injection.
 
 ### Browser testing without a real API key
@@ -300,6 +305,12 @@ Run the repeatable Review Agent scoring set:
 
     npm run eval:review:live
 
+Run the focused writing-only provider gate (six requests, DeepSeek by default):
+
+    npm run eval:review:writing-only
+
+Set `LIVE_REVIEW_MODEL=grok-4.5` to run the identical six cases with Grok. The gate covers false but well-written information, fictional and unverifiable claims, an outdated claim, strong writing without citations, accurate information written poorly, and an internal contradiction. It rejects legacy factual-risk flags and factual-verification feedback while confirming appropriate writing deductions.
+
 `EVAL_RUNS` defaults to 2 runs per case. `EVAL_IDS` selects a comma-separated subset, `EVAL_MODEL` records the non-secret model identifier used for the run, `REVIEW_EVAL_BASE_URL` changes the application URL, and `REVIEW_EVAL_TIMEOUT_MS` changes the per-request timeout. The JSON-lines output records case IDs, parameters, sub-scores, weighted and final scores, caps, bands, latency, parsing or HTTP errors, run spread, and bilingual strong-versus-poor separation. It never prints drafts, retrieved source text, credentials, rationales, or finding evidence.
 
 Run the Rewrite Agent fidelity set:
@@ -312,7 +323,7 @@ These commands provide a repeatable basis for before/after or model-version comp
 
 ## Editorial research basis
 
-The news-editor prompt uses only shared, high-level principles—accuracy, concise structure, close attribution, explicit uncertainty, and separation of reporting from promotion. It does not copy article wording or imitate an outlet's voice. Research reviewed:
+The Rewrite Agent's news-editor prompt uses shared, high-level principles such as source fidelity, concise structure, close attribution, explicit uncertainty, and separation of reporting from promotion. The writing-only Review Agent does not use these sources for factual verification and never compares a draft with external reporting. Neither prompt copies article wording or imitates an outlet's voice. Research reviewed for rewrite/editorial design:
 
 - BBC [Accuracy editorial guidelines](https://downloads.bbc.co.uk/guidelines/editorialguidelines/pdfs/bbc-editorial-guidelines-section-3-accuracy.pdf), [Writing Concisely exercise](https://downloads.bbc.co.uk/academy/academyfiles/Writing_Concisely.pdf), and a [representative report](https://feeds.bbci.co.uk/news/articles/c7vlngvm6d7o)
 - CNN Academy [Ethics in Journalism](https://academy.cnn.com/hub-course/ethics-in-journalism/) and [representative CNN Newsource reporting](https://kesq.com/news/national-politics/cnn-us-politics/2026/05/12/exclusive-cia-escalates-secret-war-on-cartels-with-deadly-operations-inside-mexico/)
@@ -387,9 +398,41 @@ Although the supported providers may offer multimodal models, this application s
 
 The review/rewrite workspace now requires an approved client or employee
 session. Account requests, employee approval/rejection, single-use password
-setup, login, RBAC, CSRF-protected APIs, and server-side logout use Cloudflare
-D1 and Worker-compatible Web Crypto. The employee approval portal is available
-only to the `employee` role.
+setup, login, RBAC, CSRF-protected APIs, client removal, and server-side logout
+use Cloudflare D1 and Worker-compatible cryptography. The Admin Panel is
+available only to the `employee` role and separates account approvals, client
+accounts, and employee accounts.
+
+Passwords must contain 9–63 English keyboard characters. No uppercase,
+lowercase, number, symbol, or character-combination rule is imposed. Passwords
+use scrypt (`N=32768`, `r=8`, `p=3`) in the browser or employee CLI. D1 stores
+only a versioned, server-peppered HMAC of the derived proof, not a reusable
+proof or plaintext password. This keeps strong password storage while avoiding
+Cloudflare Free's 10 ms request CPU ceiling.
+
+Client applications do not use email verification codes or verification links.
+They are submitted directly for manual administrator approval. Approval and
+password-setup emails remain part of the account lifecycle.
+
+Create an employee interactively with one command. It prompts for email, full
+name, password, and password confirmation, checks for an existing account,
+hashes the password, and writes directly to the selected D1 environment:
+
+```powershell
+# Local D1 (default)
+npm run create-employee
+
+# Equivalent explicit local command
+npm run create-employee:local
+
+# Cloudflare D1; the target is fixed by this script
+npm run create-employee:remote
+```
+
+Apply the matching migrations before running the command. The local and remote
+scripts pass an explicit target directly to the employee-creation program, so
+npm cannot silently consume a forwarded `--remote` option. Set
+`AUTH_D1_DATABASE_NAME` to use a non-default database name.
 
 See [Accounts, authentication, and Cloudflare deployment](docs/AUTHENTICATION.md)
 for the schema, environment variables, local migration and first-employee

@@ -17,7 +17,8 @@ export async function POST(request: Request) {
     const result = await completePasswordSetup(
       getDatabase(),
       input.token,
-      input.newPassword,
+      input.passwordSalt,
+      input.passwordProof,
       request,
     );
     const response = NextResponse.json(
@@ -36,6 +37,6 @@ export async function POST(request: Request) {
     setSessionCookies(response, result.session, request);
     return response;
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, { operation: "auth.password-setup", request });
   }
 }

@@ -42,12 +42,12 @@ const scoreReasonKey: Record<ScoreKey, ScoreReasonKey> = {
 };
 
 const scoreLabel: Record<ScoreKey, string> = {
-  factualCompletenessScore: "factual completeness and support",
+  factualCompletenessScore: "content completeness and internal consistency",
   structureScore: "structure and logical flow",
   clarityScore: "clarity and readability",
   languageQualityScore: "grammar and language quality",
   professionalismScore: "news-writing professionalism",
-  attributionScore: "attribution and quotation handling",
+  attributionScore: "attribution and quotation clarity",
 };
 
 const findingScoreKey: Record<ReviewFinding["category"], ScoreKey> = {
@@ -70,24 +70,14 @@ function consistencyRiskReasons(review: ParsedReview, key: ScoreKey) {
   const risks = review.readinessRisks;
   const reasons: string[] = [];
 
-  if (key === "factualCompletenessScore") {
-    if (risks.severelyIncompleteOrUnreliable) {
-      reasons.push("the draft was flagged as severely incomplete or unreliable");
-    }
-    if (risks.seriousFactualGaps) reasons.push("serious factual gaps were flagged");
-    if (risks.unsupportedClaims) reasons.push("material unsupported claims were flagged");
-  }
   if (key === "structureScore" && risks.majorStructuralProblems) {
     reasons.push("major structural problems were flagged");
   }
   if (key === "languageQualityScore" && risks.veryPoorLanguage) {
     reasons.push("very poor language quality was flagged");
   }
-  if (key === "professionalismScore" && risks.unsupportedClaims) {
-    reasons.push("material unsupported claims were flagged");
-  }
   if (key === "attributionScore" && risks.seriousAttributionOrQuotationProblems) {
-    reasons.push("serious attribution or quotation problems were flagged");
+    reasons.push("serious attribution or quotation clarity problems were flagged");
   }
 
   return reasons;
@@ -127,12 +117,6 @@ function enforceCategoryConsistency(review: ParsedReview): ParsedReview {
   }
 
   const risks = review.readinessRisks;
-  if (risks.severelyIncompleteOrUnreliable) capScore("factualCompletenessScore", 39);
-  if (risks.seriousFactualGaps) capScore("factualCompletenessScore", 59);
-  if (risks.unsupportedClaims) {
-    capScore("factualCompletenessScore", 59);
-    capScore("professionalismScore", 59);
-  }
   if (risks.majorStructuralProblems) capScore("structureScore", 59);
   if (risks.veryPoorLanguage) capScore("languageQualityScore", 59);
   if (risks.seriousAttributionOrQuotationProblems) capScore("attributionScore", 59);
@@ -156,28 +140,23 @@ function applyScoreCaps(review: ParsedReview) {
     if (!reasons.includes(reason)) reasons.push(reason);
   }
 
-  if (review.readinessRisks.severelyIncompleteOrUnreliable) {
-    addCap(39, "The draft was marked severely incomplete or unreliable.");
-  }
   if (review.findings.some(({ severity }) => severity === "critical")) {
-    addCap(39, "At least one critical publication-readiness finding was identified.");
+    addCap(39, "At least one critical writing-quality finding was identified.");
   }
 
   const seriousRiskLabels = [
-    [review.readinessRisks.seriousFactualGaps, "Serious factual gaps were identified."],
-    [review.readinessRisks.unsupportedClaims, "Material unsupported claims were identified."],
     [review.readinessRisks.majorStructuralProblems, "Major structural problems were identified."],
     [review.readinessRisks.veryPoorLanguage, "Very poor language quality was identified."],
     [
       review.readinessRisks.seriousAttributionOrQuotationProblems,
-      "Serious attribution or quotation problems were identified.",
+      "Serious attribution or quotation clarity problems were identified.",
     ],
   ] as const;
   for (const [present, reason] of seriousRiskLabels) {
     if (present) addCap(59, reason);
   }
   if (review.findings.some(({ severity }) => severity === "major")) {
-    addCap(59, "At least one major publication-readiness finding was identified.");
+    addCap(59, "At least one major writing-quality finding was identified.");
   }
   if (review.findings.some(({ severity }) => severity === "moderate")) {
     addCap(74, "At least one moderate finding requires substantial editing.");
@@ -204,17 +183,25 @@ function applyScoreCaps(review: ParsedReview) {
     addCap(89, "At least one category is below the strong-copy anchor of 75.");
   }
 
-  if (review.missingInformation.length > 0 && review.findings.length === 0) {
-    addCap(74, "Necessary information was listed without a corresponding finding.");
-  }
-  if (
-    review.recommendations.some((item) => !item.startsWith("[Optional - no score effect]")) &&
-    review.findings.length === 0
-  ) {
-    addCap(89, "A non-optional recommendation remains despite no structured finding.");
-  }
-
   return { cap, reasons };
+}
+
+/**
+ * These three legacy fields remain required by the public JSON contract, but
+ * they can no longer affect a writing-only review. Normalising them also
+ * protects the result if a provider falls back to fact-checking habits despite
+ * the system prompt.
+ */
+function disableLegacyFactCheckingRisks(review: ParsedReview): ParsedReview {
+  return {
+    ...review,
+    readinessRisks: {
+      ...review.readinessRisks,
+      severelyIncompleteOrUnreliable: false,
+      seriousFactualGaps: false,
+      unsupportedClaims: false,
+    },
+  };
 }
 
 export function parseReviewResponse(
@@ -261,7 +248,8 @@ export function parseReviewResponse(
     );
   }
 
-  const consistentReview = enforceCategoryConsistency(parsed.data);
+  const writingOnlyReview = disableLegacyFactCheckingRisks(parsed.data);
+  const consistentReview = enforceCategoryConsistency(writingOnlyReview);
   const weightedScore = calculateWeightedScore(consistentReview);
   const { cap, reasons: scoreCapReasons } = applyScoreCaps(consistentReview);
   const overallScore = Math.min(weightedScore, cap ?? 100);

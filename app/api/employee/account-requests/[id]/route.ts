@@ -30,7 +30,10 @@ export async function GET(request: Request, context: RouteContext) {
     }
     return jsonResponse({ request: accountRequest });
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, {
+      operation: "employee.account-request.read",
+      request,
+    });
   }
 }
 
@@ -63,6 +66,9 @@ export async function PATCH(request: Request, context: RouteContext) {
       },
     });
   } catch (error) {
-    return authErrorResponse(error);
+    return authErrorResponse(error, {
+      operation: "employee.account-request.decide",
+      request,
+    });
   }
 }

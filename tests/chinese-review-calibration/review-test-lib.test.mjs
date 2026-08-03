@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
   PIPE_DATASET_HEADERS,
   RESULT_HEADERS,
   analyzeResults,
+  authenticateBenchmarkSession,
   buildTasks,
   csvEscape,
   draftSha256,
@@ -109,13 +111,21 @@ test("interactive model choices resolve only to the two supported API model IDs"
   assert.equal(modelFromPromptChoice("unsupported-model"), "");
 });
 
-test("the reusable quote-all dataset loads and validates", async () => {
+test("the reusable completed dataset loads and validates", async () => {
   const datasetPath = new URL("./chinese_review_drafts.csv", import.meta.url);
-  const { rows, warnings } = await loadDataset(datasetPath);
+  const { rows, warnings } = await loadDataset(datasetPath, {
+    allowQualityWarnings: true,
+  });
   assert.equal(rows.length, 150);
-  assert.equal(warnings.length, 0);
+  assert.equal(warnings.length, 1);
   assert.equal(rows[0].global_order, "001");
   assert.equal(rows.at(-1).global_order, "150");
+  assert.equal(rows.filter((row) => row.category === "Good").length, 30);
+  assert.ok(
+    rows
+      .filter((row) => row.category === "Good")
+      .every((row) => row.draft_text.length > 0),
+  );
 });
 
 test("the converted user TXT dataset loads and validates", async () => {
@@ -229,6 +239,92 @@ test("the selected model ID is sent to the production review route", async () =>
   assert.equal(requestBody.model, "deepseek-v4-pro");
   assert.equal(requestBody.sourceUrl, "");
   assert.equal(result.model_name, "DeepSeek V4 Pro");
+  await fs.rm(temporaryDirectory, { recursive: true, force: true });
+});
+
+test("benchmark authentication reuses login cookies and CSRF without logging secrets", async () => {
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "chinese-review-auth-"));
+  const rawLogPath = path.join(temporaryDirectory, "responses.jsonl");
+  const password = `${randomBytes(24).toString("base64url")}Aa1!`;
+  const sessionToken = randomBytes(24).toString("base64url");
+  const csrfToken = randomBytes(24).toString("base64url");
+  let loginRequest;
+  const authentication = await authenticateBenchmarkSession({
+    baseUrl: "http://127.0.0.1:3999",
+    email: "benchmark@example.test",
+    password,
+    timeoutMs: 5_000,
+    fetchImpl: async (url, options) => {
+      if (url.endsWith("/api/auth/login/challenge")) {
+        return new Response(
+          JSON.stringify({
+            derivation: {
+              algorithm: "pbkdf2-sha256",
+              salt: Buffer.alloc(16).toString("base64url"),
+              iterations: 100_000,
+              keyLength: 32,
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+      loginRequest = options;
+      const headers = new Headers({ "Content-Type": "application/json" });
+      headers.append(
+        "Set-Cookie",
+        `pressready_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax`,
+      );
+      headers.append(
+        "Set-Cookie",
+        `pressready_csrf=${csrfToken}; Path=/; SameSite=Strict`,
+      );
+      return new Response(
+        JSON.stringify({ user: { role: "client" }, redirectTo: "/" }),
+        { status: 200, headers },
+      );
+    },
+  });
+  assert.equal(loginRequest.headers.Origin, "http://127.0.0.1:3999");
+  const loginBody = JSON.parse(loginRequest.body);
+  assert.deepEqual(
+    { email: loginBody.email, password: loginBody.password },
+    {
+    email: "benchmark@example.test",
+    password,
+    },
+  );
+  assert.match(loginBody.passwordProof, /^[A-Za-z0-9_-]{43}$/u);
+  assert.equal(authentication.csrfToken, csrfToken);
+  assert.ok(authentication.cookieHeader.includes(`pressready_session=${sessionToken}`));
+  assert.ok(authentication.cookieHeader.includes(`pressready_csrf=${csrfToken}`));
+
+  const task = { ...makeDrafts(1)[0], repeat_number: 1 };
+  const result = await reviewTask(task, {
+    baseUrl: "http://127.0.0.1:3999",
+    timeoutMs: 5_000,
+    retryLimit: 0,
+    backoffMs: 0,
+    modelName: "grok-4.5",
+    rawLogPath,
+    authentication,
+    fetchImpl: async (_url, options) => {
+      assert.equal(options.headers.Origin, "http://127.0.0.1:3999");
+      assert.ok(options.headers.Cookie.includes(`pressready_session=${sessionToken}`));
+      assert.equal(options.headers["X-CSRF-Token"], csrfToken);
+      return new Response(JSON.stringify(reviewResponse(90)), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+  assert.equal(result.test_status, "Success");
+  const rawLog = await fs.readFile(rawLogPath, "utf8");
+  assert.ok(!rawLog.includes(sessionToken));
+  assert.ok(!rawLog.includes(csrfToken));
+  assert.ok(!rawLog.includes(password));
   await fs.rm(temporaryDirectory, { recursive: true, force: true });
 });
 

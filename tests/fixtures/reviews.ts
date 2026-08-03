@@ -10,12 +10,12 @@ export const lowReviewModelResponse: ReviewModelResponse = {
   attributionScore: 48,
   scoreReasons: {
     factualCompleteness:
-      "The central announcement is identifiable, but necessary responsibility and timing details are absent.",
+      "The central announcement is identifiable, but relationships between the draft's own notes are left unexplained.",
     structure: "The draft has no effective lead and moves between ideas without a logical order.",
     clarity: "Fragments, repetition, and vague references make the intended meaning hard to follow.",
     languageQuality: "Frequent grammar and punctuation errors require line-by-line editing.",
     professionalism: "Meta-editing notes and informal wording are unsuitable for publication.",
-    attribution: "Several claims are not tied clearly to an identified source.",
+    attribution: "Several speaker references are too vague to follow within the draft.",
   },
   readinessRisks: {
     severelyIncompleteOrUnreliable: false,
@@ -31,7 +31,7 @@ export const lowReviewModelResponse: ReviewModelResponse = {
       severity: "major",
       issue: "The copy lacks a usable news lead and coherent paragraph sequence.",
       evidence: "The opening consists of fragments and later paragraphs repeat the announcement.",
-      recommendation: "Lead with the verified announcement and reorder support in descending importance.",
+      recommendation: "Lead with the announcement and reorder the existing details in descending importance.",
     },
     {
       category: "languageQuality",
@@ -43,9 +43,9 @@ export const lowReviewModelResponse: ReviewModelResponse = {
   ],
   decision: "REWRITE_REQUIRED",
   strengths: ["The main announcement can be identified."],
-  missingInformation: ["The responsible organisation is not identified."],
+  missingInformation: ["The relationship between the second and third notes is not explained."],
   recommendations: [
-    "Lead with the announcement, identify the responsible organisation, and rebuild the copy in a clear news order.",
+    "Lead with the announcement, connect the existing ideas, and rebuild the copy in a clear news order.",
   ],
 };
 
@@ -57,7 +57,7 @@ export const lowReview: ReviewResult = {
   scoreCapReasons: [
     "Major structural problems were identified.",
     "Very poor language quality was identified.",
-    "At least one major publication-readiness finding was identified.",
+    "At least one major writing-quality finding was identified.",
     "At least one category is severely deficient (below 40).",
     "A severe category weakness prevents a high readiness score.",
   ],
@@ -74,12 +74,12 @@ export const highReviewModelResponse: ReviewModelResponse = {
   professionalismScore: 91,
   attributionScore: 91,
   scoreReasons: {
-    factualCompleteness: "The central event, material facts, and source support are complete.",
+    factualCompleteness: "The central event and supporting details are complete and internally consistent as written.",
     structure: "The lead and supporting paragraphs follow an effective news order.",
     clarity: "The meaning is precise and easy to follow throughout.",
     languageQuality: "Grammar, punctuation, and sentence mechanics are polished.",
     professionalism: "The copy uses a neutral and publication-ready newsroom style.",
-    attribution: "Claims and direct quotations are attributed clearly and consistently.",
+    attribution: "Speaker references and direct quotations are presented clearly and consistently.",
   },
   readinessRisks: {
     severelyIncompleteOrUnreliable: false,
@@ -93,7 +93,7 @@ export const highReviewModelResponse: ReviewModelResponse = {
   decision: "PASS",
   strengths: ["The article is complete, clear, well structured, and professionally attributed."],
   missingInformation: [],
-  recommendations: ["[Optional - no score effect] Perform a final fact check before publication."],
+  recommendations: ["[Optional - no score effect] Perform a final proofreading pass before publication."],
 };
 
 export const highReview: ReviewResult = {

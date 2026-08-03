@@ -11,11 +11,11 @@ export default function AccessDeniedPage() {
     <AuthShell
       eyebrow="Restricted area"
       title="Access denied"
-      description="Your account does not have employee permission to open the account approval portal."
+      description="Your account does not have employee permission to open the Admin Panel."
       footer={<Link href="/">Return to the review workspace</Link>}
     >
       <div className="auth-alert auth-alert-error" role="alert">
-        Client accounts cannot access employee pages or approval APIs.
+        Client accounts cannot access Admin Panel pages or APIs.
       </div>
     </AuthShell>
   );

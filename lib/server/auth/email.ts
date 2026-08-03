@@ -3,14 +3,17 @@ import {
   getEmailDeliveryMode,
   getEmailProviderConfig,
 } from "@/lib/server/auth/config";
-import type { AccountRequestView } from "@/lib/shared/auth-contracts";
+import type {
+  AccountListUserView,
+  AccountRequestView,
+} from "@/lib/shared/auth-contracts";
 
 interface EmailMessage {
   to: string;
   subject: string;
   text: string;
   html: string;
-  messageType: "new_request" | "approved_setup" | "rejected";
+  messageType: "new_request" | "approved_setup" | "rejected" | "client_removed";
   sensitiveUrl?: string;
 }
 
@@ -19,6 +22,32 @@ export interface EmailDeliveryResult {
   providerMessageId?: string;
   errorCode?: string;
   developmentSetupUrl?: string;
+}
+
+function diagnosticText(value: unknown) {
+  return typeof value === "string" ? value.slice(0, 240) : undefined;
+}
+
+function logEmailDeliveryFailure(messageType: EmailMessage["messageType"], error: unknown) {
+  const cause =
+    error instanceof Error && "cause" in error && error.cause instanceof Error
+      ? error.cause
+      : undefined;
+  console.error("[auth-email] Delivery failed.", {
+    messageType,
+    errorType: error instanceof Error ? error.name : typeof error,
+    errorCode:
+      error instanceof Error && "code" in error && typeof error.code === "string"
+        ? error.code.slice(0, 80)
+        : undefined,
+    errorMessage: error instanceof Error ? diagnosticText(error.message) : undefined,
+    causeType: cause?.name,
+    causeCode:
+      cause && "code" in cause && typeof cause.code === "string"
+        ? cause.code.slice(0, 80)
+        : undefined,
+    causeMessage: diagnosticText(cause?.message),
+  });
 }
 
 function escapeHtml(value: string) {
@@ -35,9 +64,10 @@ function detailRows(request: AccountRequestView) {
     ["Full name", request.fullName],
     ["Email", request.email],
     ["Phone", request.phone],
-    ["Company or organisation", request.company],
-    ["Department", request.department],
-    ["Job title", request.jobTitle],
+    ["Company or organisation", request.company || "Not provided"],
+    ["Department", request.department || "Not provided"],
+    ["Job title", request.jobTitle || "Not provided"],
+    ["Message to administrator", request.adminMessage || "No message provided"],
   ] as const;
 }
 
@@ -51,7 +81,7 @@ export function newAccountRequestEmail(
   const htmlDetails = rows
     .map(
       ([label, value]) =>
-        `<tr><th align="left">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`,
+        `<tr><th align="left">${escapeHtml(label)}</th><td>${escapeHtml(value).replace(/\n/gu, "<br>")}</td></tr>`,
     )
     .join("");
 
@@ -120,6 +150,28 @@ export function rejectedAccountEmail(
   };
 }
 
+export function removedClientAccountEmail(
+  client: AccountListUserView,
+  removalMessage: string,
+): EmailMessage {
+  return {
+    to: client.email,
+    subject: "Your PressReady account has been removed",
+    messageType: "client_removed",
+    text:
+      `Hello ${client.fullName},\n\n` +
+      "Your PressReady account has been removed and access has been revoked.\n\n" +
+      `Message from the administrator:\n${removalMessage}\n\n` +
+      "Contact the organisation if you need further assistance.",
+    html:
+      `<p>Hello ${escapeHtml(client.fullName)},</p>` +
+      "<p>Your PressReady account has been removed and access has been revoked.</p>" +
+      "<p><strong>Message from the administrator:</strong></p>" +
+      `<p>${escapeHtml(removalMessage).replace(/\n/gu, "<br>")}</p>` +
+      "<p>Contact the organisation if you need further assistance.</p>",
+  };
+}
+
 export async function deliverEmail(message: EmailMessage): Promise<EmailDeliveryResult> {
   try {
     const mode = getEmailDeliveryMode();
@@ -144,17 +196,21 @@ export async function deliverEmail(message: EmailMessage): Promise<EmailDelivery
           [provider.authHeader]: authorizationValue,
         },
         body: JSON.stringify({
-          from: {
-            email: provider.senderAddress,
-            name: provider.senderName,
-          },
-          to: [{ email: message.to }],
+          from: `${provider.senderName} <${provider.senderAddress}>`,
+          to: [message.to],
           subject: message.subject,
           text: message.text,
           html: message.html,
-          metadata: { messageType: message.messageType },
+          tags: [
+            {
+              name: "message_type",
+              value: message.messageType,
+            },
+          ],
         }),
-        redirect: "error",
+        // Workerd does not implement redirect: "error". Manual mode preserves the
+        // same security property: redirects are never followed with the provider key.
+        redirect: "manual",
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -174,6 +230,7 @@ export async function deliverEmail(message: EmailMessage): Promise<EmailDelivery
       clearTimeout(timeout);
     }
   } catch (error) {
+    logEmailDeliveryFailure(message.messageType, error);
     const errorCode =
       error instanceof DOMException && error.name === "AbortError"
         ? "TIMEOUT"

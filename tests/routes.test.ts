@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { POST as reviewRoute } from "@/app/api/review/route";
 import { POST as rewriteRoute } from "@/app/api/rewrite/route";
+import { POST as directRewriteRoute } from "@/app/api/rewrite/direct/route";
+import { recordAgentRequestAttempt } from "@/lib/server/auth/request-usage";
 import {
   MAX_DRAFT_CHARS,
   MAX_REQUEST_BYTES,
@@ -26,6 +28,10 @@ vi.mock("@/lib/server/auth/guards", () => ({
     csrfTokenHash: "test",
     expiresAt: 4_102_444_800,
   }),
+}));
+
+vi.mock("@/lib/server/auth/request-usage", () => ({
+  recordAgentRequestAttempt: vi.fn().mockResolvedValue(undefined),
 }));
 
 const PUBLIC_SOURCE_URL = "https://93.184.216.34/reference-article";
@@ -93,6 +99,7 @@ async function responseErrorCode(response: Response) {
 
 describe("review and rewrite API routes", () => {
   afterEach(() => {
+    vi.clearAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
@@ -198,10 +205,10 @@ describe("review and rewrite API routes", () => {
     });
     const userPrompt = providerUserPrompt(fetchMock);
     expect(userPrompt).toContain(editorialInput.draft);
-    expect(userPrompt).toContain(PUBLIC_SOURCE_URL);
-    expect(userPrompt).toContain("Reference headline");
-    expect(userPrompt).toContain("retrieved reference confirms the pilot");
-    expect(userPrompt).toContain("Officials at the briefing.");
+    expect(userPrompt).not.toContain(PUBLIC_SOURCE_URL);
+    expect(userPrompt).not.toContain("Reference headline");
+    expect(userPrompt).not.toContain("retrieved reference confirms the pilot");
+    expect(userPrompt).not.toContain("Officials at the briefing.");
   });
 
   it("derives the source language and rewrites even when the review score is high", async () => {
@@ -239,6 +246,40 @@ describe("review and rewrite API routes", () => {
     expect(userPrompt).toContain('"primaryText": "Officials confirmed the supported update."');
     expect(userPrompt).toContain('"requiredOutputLanguage": "English"');
     expect(userPrompt).toContain('"sourceUrl": "https://news.example/reference"');
+  });
+
+  it("rewrites directly with one Rewrite Agent call and no Review Agent feedback", async () => {
+    vi.stubEnv("XAI_API_KEY", "test-key");
+    const draft = "Officials confirmed the supported update on Thursday.";
+    const finalText =
+      "Officials confirm Thursday update\n\nOfficials confirmed the supported update on Thursday.";
+    const fetchMock = vi.fn().mockResolvedValue(completionResponse(finalText));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await directRewriteRoute(
+      request("/api/rewrite/direct", JSON.stringify({ draft, sourceUrl: "" })),
+    );
+    const body = (await response.json()) as {
+      finalText: string;
+      source: SourceSnapshot;
+    };
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(body.finalText).toBe(finalText);
+    expect(body.source).toEqual({ primaryText: draft, userDraft: draft, imageContext: [] });
+    expect(providerUserPrompt(fetchMock)).toContain("direct rewrite without a prior review");
+    expect(providerUserPrompt(fetchMock)).not.toContain("reviewFeedback");
+    expect(recordAgentRequestAttempt).toHaveBeenCalledWith("editorial-test-user", "rewrite");
+  });
+
+  it("does not count an invalid direct rewrite request", async () => {
+    const response = await directRewriteRoute(
+      request("/api/rewrite/direct", JSON.stringify({ draft: "", sourceUrl: "" })),
+    );
+
+    expect(response.status).toBe(400);
+    expect(recordAgentRequestAttempt).not.toHaveBeenCalled();
   });
 
   it("forwards refinement history and the latest length preference to the Rewrite Agent", async () => {

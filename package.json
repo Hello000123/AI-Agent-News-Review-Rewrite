@@ -15,7 +15,9 @@
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "db:migrate:local": "wrangler d1 migrations apply pressready-auth --local",
     "db:migrate:remote": "wrangler d1 migrations apply pressready-auth --remote",
-    "employee:prepare": "node scripts/create-employee.mjs",
+    "create-employee": "node scripts/create-employee.mjs --local",
+    "create-employee:local": "node scripts/create-employee.mjs --local",
+    "create-employee:remote": "node scripts/create-employee.mjs --remote",
     "start": "next start",
     "lint": "eslint .",
     "mock:grok": "node tests/mock-grok-server.mjs",
@@ -25,13 +27,17 @@
     "convert:review-dataset": "node tests/chinese-review-calibration/convert-pipe-dataset.mjs",
     "eval:live": "node --experimental-strip-types tests/live-rewrite-evaluation.mjs",
     "eval:review:live": "node --experimental-strip-types tests/live-review-evaluation.mjs",
+    "eval:review:writing-only": "vitest run --config vitest.live.config.ts",
     "test": "npm run typecheck && npm run lint && npm run test:unit && npm run build"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "1.20.2",
+    "fflate": "^0.8.3",
     "next": "16.2.11",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "scrypt-js": "^3.0.1",
+    "unpdf": "^1.8.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

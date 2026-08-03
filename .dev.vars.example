@@ -6,6 +6,7 @@ NEXTJS_ENV=development
 APP_ENV=development
 PUBLIC_APP_URL=http://localhost:8787
 AUTH_SECRET=replace-with-a-local-random-32-byte-or-longer-secret
+PASSWORD_PEPPER=replace-with-a-different-local-random-32-byte-secret
 SESSION_TTL_SECONDS=43200
 PASSWORD_SETUP_TTL_SECONDS=86400
 
@@ -21,9 +22,9 @@ XAI_API_KEY=
 DEEPSEEK_API_KEY=
 AI_MODEL=grok-4.5
 
-# For HTTP email delivery, configure these as Worker secrets/variables in
+# For Resend HTTP delivery, configure these as Worker secrets/variables in
 # production and set EMAIL_DELIVERY_MODE=http.
-EMAIL_PROVIDER_API_URL=
+EMAIL_PROVIDER_API_URL=https://api.resend.com/emails
 EMAIL_PROVIDER_API_KEY=
 EMAIL_PROVIDER_AUTH_HEADER=Authorization
 EMAIL_PROVIDER_AUTH_SCHEME=Bearer

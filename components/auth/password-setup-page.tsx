@@ -4,12 +4,14 @@ import { useEffect, useState } from "react";
 
 import { PasswordSetupForm } from "@/components/auth/password-setup-form";
 import { AuthRequestError, validateSetupToken } from "@/lib/client/auth-api";
+import type { PasswordDerivation } from "@/lib/shared/auth-contracts";
 
 interface SetupDetails {
   token: string;
   email: string;
   fullName: string;
   expiresAt: number;
+  derivation: PasswordDerivation;
 }
 
 export function PasswordSetupPage() {
@@ -68,5 +70,11 @@ export function PasswordSetupPage() {
     );
   }
 
-  return <PasswordSetupForm email={details.email} token={details.token} />;
+  return (
+    <PasswordSetupForm
+      email={details.email}
+      token={details.token}
+      derivation={details.derivation}
+    />
+  );
 }

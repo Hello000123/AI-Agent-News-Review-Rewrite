@@ -555,7 +555,7 @@ async function generateCandidate(
 
 export async function runRewriteAgent(
   source: SourceSnapshot,
-  review: ReviewResult,
+  review: ReviewResult | null,
   completionRunner: CompletionRunner = requestModelCompletion,
   context: RewriteContext = EMPTY_REWRITE_CONTEXT,
   model?: SelectableModelId,

@@ -64,6 +64,15 @@ const noReadinessRisks = {
   seriousAttributionOrQuotationProblems: false,
 } as const;
 
+const factCheckingFeedbackPatterns = [
+  /fact[- ]?check/iu,
+  /factually (?:in)?correct/iu,
+  /(?:false|inaccurate|outdated) (?:claim|statement|information|assertion)/iu,
+  /unverifiable|cannot be verified|requires? verification/iu,
+  /unsupported (?:claim|statement|assertion|statistic)/iu,
+  /(?:missing|lack(?:s|ing)?|no) (?:citation|citations|external source|supporting source|evidence)/iu,
+] as const;
+
 const publicationReadyExpectations = {
   readinessBand: "PUBLICATION_READY",
   overallScoreRange: [90, 100],
@@ -79,6 +88,7 @@ const publicationReadyExpectations = {
   },
   requiredRisks: noReadinessRisks,
   requireNoScoreCap: true,
+  forbiddenFeedbackPatterns: factCheckingFeedbackPatterns,
 } as const satisfies ReviewEvaluationExpectations;
 
 const strongLimitedEditingExpectations = {
@@ -95,6 +105,7 @@ const strongLimitedEditingExpectations = {
     attributionScore: 65,
   },
   requiredRisks: noReadinessRisks,
+  forbiddenFeedbackPatterns: factCheckingFeedbackPatterns,
 } as const satisfies ReviewEvaluationExpectations;
 
 const highQualityExpectations = {
@@ -112,6 +123,7 @@ const highQualityExpectations = {
     attributionScore: 75,
   },
   requiredRisks: noReadinessRisks,
+  forbiddenFeedbackPatterns: factCheckingFeedbackPatterns,
 } as const satisfies ReviewEvaluationExpectations;
 
 const relativeTimeWarningPatterns = [
@@ -125,7 +137,10 @@ const relativeTimeWarningPatterns = [
 
 const validTimeContextExpectations = {
   ...highQualityExpectations,
-  forbiddenFeedbackPatterns: relativeTimeWarningPatterns,
+  forbiddenFeedbackPatterns: [
+    ...factCheckingFeedbackPatterns,
+    ...relativeTimeWarningPatterns,
+  ],
 } as const satisfies ReviewEvaluationExpectations;
 
 function textRequest(draft: string): EditorialInput {
@@ -218,7 +233,9 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
       maximumCategoryRunSpread: 12,
       maximumCategoryScores: { structureScore: 39, professionalismScore: 39 },
       requiredRisks: {
-        severelyIncompleteOrUnreliable: true,
+        severelyIncompleteOrUnreliable: false,
+        seriousFactualGaps: false,
+        unsupportedClaims: false,
         majorStructuralProblems: true,
       },
       maximumAppliedScoreCap: 39,
@@ -276,7 +293,7 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
     id: "missing_time_context",
     language: "english",
     inputKind: "text",
-    tags: ["english", "missing_facts", "missing_time", "time_context"],
+    tags: ["english", "high_quality", "missing_time", "time_context"],
     request: textRequest(
       [
         "Harbour Council announces free meal programme",
@@ -285,15 +302,11 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
       ].join("\n\n"),
     ),
     expected: {
-      readinessBand: "STRONG_LIMITED_EDITING",
-      allowedReadinessBands: ["STRONG_LIMITED_EDITING", "SUBSTANTIAL_REWRITE"],
-      overallScoreRange: [60, 89],
-      maximumOverallRunSpread: 10,
-      maximumCategoryRunSpread: 15,
-      maximumCategoryScores: { factualCompletenessScore: 89 },
-      maximumAppliedScoreCap: 89,
-      minimumFindings: 1,
-      requiredFeedbackPatterns: [/\b(?:time|timing|when|chronolog|date)\w*\b/iu],
+      ...highQualityExpectations,
+      forbiddenFeedbackPatterns: [
+        ...factCheckingFeedbackPatterns,
+        ...relativeTimeWarningPatterns,
+      ],
     },
   },
   {
@@ -315,6 +328,11 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
       maximumOverallRunSpread: 12,
       maximumCategoryRunSpread: 15,
       maximumCategoryScores: { factualCompletenessScore: 59 },
+      requiredRisks: {
+        severelyIncompleteOrUnreliable: false,
+        seriousFactualGaps: false,
+        unsupportedClaims: false,
+      },
       maximumAppliedScoreCap: 59,
       minimumFindings: 1,
       requiredFeedbackPatterns: [/\b(?:contradict|conflict|inconsisten|chronolog|timeline)\w*\b/iu],
@@ -382,42 +400,36 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
       "Riverton Council said on 14 July 2026 that it will open a learning centre offering evening technology courses. The announcement did not identify the centre's location, opening date, capacity, fees or course operator.",
     ),
     expected: {
-      readinessBand: "WEAK",
-      overallScoreRange: [40, 59],
-      maximumOverallRunSpread: 8,
-      maximumCategoryRunSpread: 12,
-      maximumCategoryScores: { factualCompletenessScore: 59 },
-      requiredRisks: { seriousFactualGaps: true },
-      maximumAppliedScoreCap: 59,
-      minimumFindings: 1,
+      readinessBand: "SUBSTANTIAL_REWRITE",
+      allowedReadinessBands: ["SUBSTANTIAL_REWRITE", "STRONG_LIMITED_EDITING"],
+      overallScoreRange: [60, 89],
+      maximumOverallRunSpread: 10,
+      maximumCategoryRunSpread: 15,
+      maximumCategoryScores: { factualCompletenessScore: 89 },
+      requiredRisks: noReadinessRisks,
+      forbiddenFeedbackPatterns: factCheckingFeedbackPatterns,
     },
   },
   {
     id: "unsupported_material_claims",
     language: "english",
     inputKind: "text",
-    tags: ["english", "unsupported_claims", "statistics", "promotional_language"],
+    tags: ["english", "high_quality", "fictional_claims", "unverifiable_claims"],
     request: textRequest(
-      "Harbour Analytics launched a traffic platform on Tuesday. The company said the platform will eliminate congestion across the city within six months, cut every commuter's journey by exactly 37% and is the safest transport system ever developed. The article provides no study, trial results, methodology, independent source or qualification for those claims.",
+      [
+        "Aster Vale opens floating library above Meridian Bay",
+        "Aster Vale Library opened a floating reading room above Meridian Bay on Monday, giving residents access to 80,000 books from a solar-powered platform suspended 300 metres above the water.",
+        "The city authority said quiet electric lifts will carry visitors from the eastern pier every 15 minutes. Library director Ilya North said the facility was designed to combine public study space with panoramic views.",
+        "The library will operate daily and reserve its first hour for school groups.",
+      ].join("\n\n"),
     ),
-    expected: {
-      readinessBand: "WEAK",
-      overallScoreRange: [40, 59],
-      maximumOverallRunSpread: 8,
-      // The final readiness result is cap-stable; allow modest variation among
-      // secondary categories while keeping the factual/professional gates strict.
-      maximumCategoryRunSpread: 15,
-      maximumCategoryScores: { factualCompletenessScore: 59, professionalismScore: 59 },
-      requiredRisks: { unsupportedClaims: true },
-      maximumAppliedScoreCap: 59,
-      minimumFindings: 1,
-    },
+    expected: highQualityExpectations,
   },
   {
     id: "severely_unreliable_fragment",
     language: "english",
     inputKind: "text",
-    tags: ["english", "severely_deficient", "unsupported_claims", "contradictory"],
+    tags: ["english", "severely_deficient", "poor_writing", "contradictory"],
     request: textRequest(
       "Amazing transport thing fixed every road problem. It launched recently—or maybe it has not launched yet; confirm later. Everyone approves and there have been zero accidents. Add the operator, product, city, date, evidence and sources.",
     ),
@@ -426,10 +438,13 @@ export const reviewEvaluationCases: readonly ReviewEvaluationCase[] = [
       overallScoreRange: [0, 39],
       maximumOverallRunSpread: 10,
       maximumCategoryRunSpread: 12,
-      maximumCategoryScores: { factualCompletenessScore: 39, attributionScore: 39 },
+      maximumCategoryScores: { factualCompletenessScore: 39, structureScore: 39 },
       requiredRisks: {
-        severelyIncompleteOrUnreliable: true,
-        unsupportedClaims: true,
+        severelyIncompleteOrUnreliable: false,
+        seriousFactualGaps: false,
+        unsupportedClaims: false,
+        majorStructuralProblems: true,
+        veryPoorLanguage: true,
       },
       maximumAppliedScoreCap: 39,
       minimumFindings: 1,

@@ -160,7 +160,7 @@ export async function reviewDraft(
 
 export async function rewriteWithFeedback(
   source: SourceSnapshot,
-  review: ReviewResult,
+  review: ReviewResult | null,
   completionRunner?: CompletionRunner,
   context: RewriteContext = {
     history: [],

@@ -41,7 +41,7 @@ const RESULT_LABELS = Object.freeze({
   expected_max: "Expected maximum",
   repeat_number: "Repeat",
   actual_overall_score: "Actual overall score",
-  factual_completeness_score: "Factual completeness",
+  factual_completeness_score: "Content completeness & internal consistency",
   structure_score: "Structure",
   clarity_score: "Clarity",
   language_quality_score: "Language quality",

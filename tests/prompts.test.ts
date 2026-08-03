@@ -39,48 +39,48 @@ describe("agent prompts", () => {
   it("defines strict six-category review anchors, weights, caps, and JSON output", () => {
     const prompt = createReviewSystemPrompt(87);
 
-    expect(prompt).toContain("strict, language-fair professional news-copy reviewer");
-    expect(prompt).toContain("Evaluate; do not rewrite");
-    expect(prompt).toContain("factualCompletenessScore (25%)");
+    expect(prompt).toContain("strict, language-fair professional writing reviewer");
+    expect(prompt).toContain("Evaluate the writing; do not rewrite it");
+    expect(prompt).toContain("factualCompletenessScore (25%; legacy key)");
     expect(prompt).toContain("structureScore (20%)");
     expect(prompt).toContain("clarityScore (15%)");
     expect(prompt).toContain("languageQualityScore (15%)");
     expect(prompt).toContain("professionalismScore (15%)");
     expect(prompt).toContain("attributionScore (10%)");
-    expect(prompt).toContain("90-100: publication-ready");
-    expect(prompt).toContain("75-89: strong but still needs limited editing");
-    expect(prompt).toContain("60-74: usable information, but substantial rewriting is required");
-    expect(prompt).toContain("0-39: severely deficient");
-    expect(prompt).toContain("caps overall readiness at 39");
-    expect(prompt).toContain("caps it at 59");
-    expect(prompt).toContain("The backend recomputes and may cap it");
+    expect(prompt).toContain("90-100: writing is publication-ready");
+    expect(prompt).toContain("75-89: strong writing that still needs limited editing");
+    expect(prompt).toContain("60-74: understandable writing, but substantial rewriting is required");
+    expect(prompt).toContain("0-39: severely deficient or fragmentary writing");
+    expect(prompt).toContain("critical writing finding caps overall writing readiness at 39");
+    expect(prompt).toContain("major writing finding, major structural problem");
+    expect(prompt).toContain("backend recomputes it and may apply only writing-quality consistency caps");
     expect(prompt).toContain("publisher reputation");
-    expect(prompt).toContain("Newsworthiness never increases writing-quality scores");
+    expect(prompt).toContain("not newsworthiness");
     expect(prompt).toContain("Apply the same standard to English and Traditional Chinese");
-    expect(prompt).toContain("An exact calendar date is not mandatory");
-    expect(prompt).toContain("yesterday, today, recently");
-    expect(prompt).toContain("昨天, 今日, 近日, 近期");
-    expect(prompt).toContain("no meaningful date or time information");
-    expect(prompt).toContain("genuinely unclear, internally contradictory");
-    expect(prompt).toContain("chronology is not relevant");
-    expect(prompt).toContain("Do not infer or invent an exact date");
-    expect(prompt).toContain("Score every category independently");
+    expect(prompt).toContain("yesterday, recently, 昨天, 今日, or 近日");
+    expect(prompt).toContain("internally unclear or directly contradictory");
+    expect(prompt).toContain("Score every category independently using only visible writing evidence");
+    expect(prompt).toContain("Do not fact-check");
+    expect(prompt).toContain("clearly false, fictional, hypothetical, satirical, outdated, unverifiable");
+    expect(prompt).toContain("Missing citations, links, evidence, named sources, or external support are never review failures");
+    expect(prompt).toContain("Always set severelyIncompleteOrUnreliable=false, seriousFactualGaps=false, and unsupportedClaims=false");
     expect(prompt).not.toContain("Classify the band first");
     expect(prompt).toContain("Any category below 40 caps it at 59");
-    expect(prompt).toContain('"seriousFactualGaps": true');
-    expect(prompt).toContain('"category": "factualCompleteness"');
+    expect(prompt).toContain('"seriousFactualGaps": false');
+    expect(prompt).toContain('"category": "structure"');
     expect(prompt).toContain("Return only strict JSON");
     expect(prompt).toContain("Return PASS only if the backend-computed overall score is at least 87");
-    expect(prompt).toContain('"overallScore": 48');
+    expect(prompt).toContain('"overallScore": 49');
     expect(prompt).toContain('"readinessRisks"');
     expect(prompt).toContain('"findings"');
     expect(prompt).not.toContain("contentScore (40%)");
   });
 
-  it("separates the submitted draft from URL-derived reference material", () => {
+  it("sends only the submitted draft and internal metadata to the reviewer", () => {
     const prompt = createReviewUserPrompt(editorialSource);
     const payload = embeddedJson(prompt) as {
       draftOrigin: string;
+      selectedDocumentType: string;
       submittedDraft: string;
       detectedTimeContext: {
         exactDateExpressions: string[];
@@ -88,30 +88,21 @@ describe("agent prompts", () => {
         uncertaintyCues: string[];
         contradictionCues: string[];
       };
-      referenceMaterial: {
-        sourceUrl?: string;
-        linkedTitle?: string;
-        linkedText?: string;
-        imageContext: SourceSnapshot["imageContext"];
-      };
     };
 
-    expect(prompt).toContain("Evaluate submittedDraft");
-    expect(prompt).toContain("Reference material is context, not writing to reward");
+    expect(prompt).toContain("writing quality of submittedDraft");
+    expect(prompt).toContain("No external reference material is provided to the reviewer");
+    expect(prompt).not.toContain(editorialSource.linkedText);
+    expect(prompt).not.toContain(editorialSource.sourceUrl);
     expect(payload).toEqual({
       draftOrigin: "user_submitted_text",
+      selectedDocumentType: "news_article",
       submittedDraft: editorialSource.primaryText,
       detectedTimeContext: {
         exactDateExpressions: [],
         relativeTimeExpressions: [],
         uncertaintyCues: [],
         contradictionCues: [],
-      },
-      referenceMaterial: {
-        sourceUrl: editorialSource.sourceUrl,
-        linkedTitle: editorialSource.linkedTitle,
-        linkedText: editorialSource.linkedText,
-        imageContext: editorialSource.imageContext,
       },
     });
 
@@ -125,9 +116,10 @@ describe("agent prompts", () => {
     );
     expect(linkOnly).toMatchObject({
       draftOrigin: "retrieved_link_article",
+      selectedDocumentType: "news_article",
       submittedDraft: "Retrieved article text.",
-      referenceMaterial: { sourceUrl: "https://news.example/retrieved" },
     });
+    expect(linkOnly).not.toHaveProperty("referenceMaterial");
   });
 
   it("makes source authority, genuine editing, quotation fidelity, and format explicit", () => {

@@ -8,6 +8,9 @@ out/
 # Test and build artifacts
 coverage/
 *.tsbuildinfo
+*.bak
+*.tmp
+*.temp
 
 # Calibration datasets and reports are intentionally versioned
 !tests/chinese-review-calibration/*.csv

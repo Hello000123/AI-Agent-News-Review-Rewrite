@@ -15,7 +15,28 @@ function validationFieldErrors(error: ZodError) {
   return fieldErrors;
 }
 
-export function authErrorResponse(error: unknown) {
+interface AuthErrorContext {
+  operation: string;
+  request?: Request;
+}
+
+function logUnexpectedAuthError(
+  error: unknown,
+  requestId: string,
+  context?: AuthErrorContext,
+) {
+  const appError = isAppError(error) ? error : null;
+  console.error("[auth] Request failed", {
+    requestId,
+    operation: context?.operation ?? "auth.unknown",
+    method: context?.request?.method,
+    pathname: context?.request ? new URL(context.request.url).pathname : undefined,
+    errorType: error instanceof Error ? error.name : typeof error,
+    errorCode: appError?.code,
+  });
+}
+
+export function authErrorResponse(error: unknown, context?: AuthErrorContext) {
   if (error instanceof ZodError) {
     const body: AuthApiErrorBody = {
       error: {
@@ -28,6 +49,9 @@ export function authErrorResponse(error: unknown) {
   }
 
   if (isAppError(error)) {
+    if (error.status >= 500) {
+      logUnexpectedAuthError(error, crypto.randomUUID(), context);
+    }
     const body: AuthApiErrorBody = {
       error: {
         code: error.code,
@@ -37,10 +61,15 @@ export function authErrorResponse(error: unknown) {
     return jsonResponse(body, error.status);
   }
 
+  const requestId = crypto.randomUUID();
+  logUnexpectedAuthError(error, requestId, context);
   const body: AuthApiErrorBody = {
     error: {
       code: "INTERNAL_ERROR",
-      message: "An unexpected error occurred. Please try again.",
+      message:
+        "We could not complete this request. Please try again. " +
+        `If the problem continues, contact support with reference ${requestId}.`,
+      requestId,
     },
   };
   return jsonResponse(body, 500);

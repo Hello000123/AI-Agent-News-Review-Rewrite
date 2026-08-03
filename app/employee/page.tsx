@@ -6,7 +6,7 @@ import { requirePageSession } from "@/lib/server/auth/guards";
 
 export const dynamic = "force-dynamic";
 export const metadata = {
-  title: "Account approvals | PressReady",
+  title: "Admin Panel | PressReady",
 };
 
 export default async function EmployeeApprovalPage() {
@@ -18,9 +18,9 @@ export default async function EmployeeApprovalPage() {
         <div className="employee-shell">
           <div className="employee-page-heading">
             <div>
-              <div className="eyebrow">Employee portal</div>
-              <h1>Account approvals</h1>
-              <p>Review client requests and keep a clear record of every decision.</p>
+              <div className="eyebrow">Administration</div>
+              <h1>Admin Panel</h1>
+              <p>Review applications and manage client and employee account records.</p>
             </div>
             <Link className="button button-secondary" href="/">
               Review workspace

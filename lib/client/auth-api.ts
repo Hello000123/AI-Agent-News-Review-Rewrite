@@ -1,13 +1,19 @@
 import type {
   AccountDecisionInput,
+  AccountListUserView,
   AccountRequestInput,
   AccountRequestView,
+  AccountRoleSummary,
   AuthApiErrorBody,
   AuthenticatedUser,
+  ClientRemovalAuditView,
+  ClientRemovalInput,
   EmailDeliveryView,
   LoginInput,
-  PasswordSetupInput,
+  PasswordDerivation,
+  PasswordSetupFormInput,
 } from "@/lib/shared/auth-contracts";
+import { derivePasswordProof } from "@/lib/client/password-proof";
 
 const CSRF_COOKIE_NAME = "pressready_csrf";
 
@@ -91,7 +97,26 @@ function postJson<T>(endpoint: string, body: unknown, includeCsrf = false) {
   });
 }
 
-export function submitAccountRequest(input: AccountRequestInput) {
+export function submitAccountRequest(
+  input: AccountRequestInput,
+  attachment?: File | null,
+) {
+  if (attachment) {
+    const formData = new FormData();
+    for (const [key, value] of Object.entries(input)) {
+      formData.set(key, value ?? "");
+    }
+    formData.set("attachment", attachment);
+    return requestJson<{
+      requestId: string;
+      status: "pending";
+      message: string;
+      notificationStatus: "sent" | "preview" | "failed";
+    }>("/api/account-requests", {
+      method: "POST",
+      body: formData,
+    });
+  }
   return postJson<{
     requestId: string;
     status: "pending";
@@ -100,18 +125,37 @@ export function submitAccountRequest(input: AccountRequestInput) {
   }>("/api/account-requests", input);
 }
 
-export function login(input: LoginInput) {
+export async function login(input: LoginInput) {
+  const challenge = await postJson<{ derivation: PasswordDerivation }>(
+    "/api/auth/login/challenge",
+    { email: input.email },
+  );
+  const passwordProof = await derivePasswordProof(
+    input.password,
+    challenge.derivation,
+  );
   return postJson<{
     user: AuthenticatedUser;
     redirectTo: string;
-  }>("/api/auth/login", input);
+  }>("/api/auth/login", { ...input, passwordProof });
 }
 
-export function setupPassword(input: PasswordSetupInput) {
+export async function setupPassword(
+  input: PasswordSetupFormInput,
+  derivation: PasswordDerivation,
+) {
+  const passwordProof = await derivePasswordProof(
+    input.newPassword,
+    derivation,
+  );
   return postJson<{
     user: AuthenticatedUser;
     redirectTo: string;
-  }>("/api/auth/setup-password", input);
+  }>("/api/auth/setup-password", {
+    ...input,
+    passwordSalt: derivation.salt,
+    passwordProof,
+  });
 }
 
 export function validateSetupToken(token: string) {
@@ -119,6 +163,7 @@ export function validateSetupToken(token: string) {
     email: string;
     fullName: string;
     expiresAt: number;
+    derivation: PasswordDerivation;
   }>("/api/auth/setup-password/validate", { token });
 }
 
@@ -128,7 +173,7 @@ export function logout() {
 
 export function listEmployeeAccountRequests(status?: string) {
   const query = status ? `?status=${encodeURIComponent(status)}` : "";
-  return requestJson<{ requests: AccountRequestView[] }>(
+  return requestJson<{ requests: AccountRequestView[]; summary: AccountRoleSummary }>(
     `/api/employee/account-requests${query}`,
     { method: "GET" },
   );
@@ -162,6 +207,27 @@ export function resendSetupEmail(id: string) {
   }>(
     `/api/employee/account-requests/${encodeURIComponent(id)}/resend-setup`,
     {},
+    true,
+  );
+}
+
+export function listEmployeeAccounts(role: "client" | "employee") {
+  return requestJson<{
+    accounts: AccountListUserView[];
+    summary: AccountRoleSummary;
+  }>(`/api/employee/accounts?role=${encodeURIComponent(role)}`, {
+    method: "GET",
+  });
+}
+
+export function removeClientAccount(id: string, input: ClientRemovalInput) {
+  return postJson<{
+    removedAccount: AccountListUserView;
+    audit: ClientRemovalAuditView;
+    emailDelivery: EmailDeliveryView;
+  }>(
+    `/api/employee/accounts/${encodeURIComponent(id)}/remove`,
+    input,
     true,
   );
 }
